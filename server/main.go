@@ -21,7 +21,6 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// Funkcja do generowania tokenów JWT
 func generateJWT(email string) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
@@ -40,7 +39,6 @@ func generateJWT(email string) (string, error) {
 	return tokenString, nil
 }
 
-// Funkcja do weryfikacji JWT
 func verifyJWT(tokenStr string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
@@ -61,9 +59,8 @@ type Server struct {
 func (s *Server) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginReply, error) {
 	log.Println("Login attempt for email:", in.Email)
 
-	// Sprawdzenie, czy użytkownik istnieje w bazie danych
 	user, err := s.prismaClient.User.FindUnique(
-		db.User.Email.Equals(in.Email), // Pobieramy użytkownika na podstawie emaila
+		db.User.Email.Equals(in.Email),
 	).Exec(ctx)
 
 	if err != nil {
@@ -71,13 +68,11 @@ func (s *Server) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginReply
 		return nil, fmt.Errorf("incorrect email or password")
 	}
 
-	// Sprawdzenie, czy hasło się zgadza (zakładam, że hasło nie jest haszowane dla prostoty)
 	if user.Password != in.Password {
 		log.Println("Invalid password")
 		return nil, fmt.Errorf("incorrect email or password")
 	}
 
-	// Generowanie tokena JWT
 	token, err := generateJWT(in.Email)
 	fmt.Println(token)
 	if err != nil {
