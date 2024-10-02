@@ -56,14 +56,22 @@ type Server struct {
 	prismaClient *db.PrismaClient
 }
 
-func (s *Server) SampleProtected(ctx context.Context, in *pb.ProtectedRequest) (*pb.ProtectedReply, error) {
+func CurrentUser(ctx context.Context) (string, error) {
 	md, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing metadata")
+		return "", fmt.Errorf("missing metadata")
 	}
 	current_user := md["current_user"]
+	return current_user[0], nil
+}
+
+func (s *Server) SampleProtected(ctx context.Context, in *pb.ProtectedRequest) (*pb.ProtectedReply, error) {
+	currentUser, err := CurrentUser(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return &pb.ProtectedReply{
-		Result: in.Text + " " + current_user[0],
+		Result: in.Text + " " + currentUser,
 	}, nil
 }
 
