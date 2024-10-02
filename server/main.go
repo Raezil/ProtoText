@@ -56,6 +56,12 @@ type Server struct {
 	prismaClient *db.PrismaClient
 }
 
+func (s *Server) SampleProtected(ctx context.Context, in *pb.ProtectedRequest) (*pb.ProtectedReply, error) {
+	return &pb.ProtectedReply{
+		Result: in.Text + "!",
+	}, nil
+}
+
 func (s *Server) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginReply, error) {
 	log.Println("Login attempt for email:", in.Email)
 

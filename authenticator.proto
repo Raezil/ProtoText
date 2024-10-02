@@ -5,6 +5,15 @@ option go_package="authenticator/protos";
 service Auth{
     rpc Login (LoginRequest) returns (LoginReply) {}
     rpc Register (RegisterRequest) returns (RegisterReply) {}
+    rpc SampleProtected (ProtectedRequest) returns (ProtectedReply) {}
+}
+
+message ProtectedRequest{
+    string text = 1;
+}
+
+message ProtectedReply{
+    string result = 1;
 }
 
 message LoginRequest {

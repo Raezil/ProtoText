@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 func main() {
@@ -28,5 +29,13 @@ func main() {
 
 	token := loginReply.Token
 	fmt.Println("Received JWT token:", token)
-
+	md := metadata.Pairs("authorization", token)
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+	protectedReply, err := client.SampleProtected(ctx, &ProtectedRequest{
+		Text: "Hello from client",
+	})
+	if err != nil {
+		log.Fatalf("SampleProtected failed: %v", err)
+	}
+	fmt.Println("SampleProtected response:", protectedReply.Result)
 }

@@ -4,7 +4,7 @@
 // - protoc             v3.21.12
 // source: authenticator.proto
 
-package authenticator
+package protos
 
 import (
 	context "context"
@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Auth_Login_FullMethodName    = "/authenticator.Auth/Login"
-	Auth_Register_FullMethodName = "/authenticator.Auth/Register"
+	Auth_Login_FullMethodName           = "/authenticator.Auth/Login"
+	Auth_Register_FullMethodName        = "/authenticator.Auth/Register"
+	Auth_SampleProtected_FullMethodName = "/authenticator.Auth/SampleProtected"
 )
 
 // AuthClient is the client API for Auth service.
@@ -29,6 +30,7 @@ const (
 type AuthClient interface {
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginReply, error)
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterReply, error)
+	SampleProtected(ctx context.Context, in *ProtectedRequest, opts ...grpc.CallOption) (*ProtectedReply, error)
 }
 
 type authClient struct {
@@ -59,12 +61,23 @@ func (c *authClient) Register(ctx context.Context, in *RegisterRequest, opts ...
 	return out, nil
 }
 
+func (c *authClient) SampleProtected(ctx context.Context, in *ProtectedRequest, opts ...grpc.CallOption) (*ProtectedReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProtectedReply)
+	err := c.cc.Invoke(ctx, Auth_SampleProtected_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AuthServer is the server API for Auth service.
 // All implementations must embed UnimplementedAuthServer
 // for forward compatibility.
 type AuthServer interface {
 	Login(context.Context, *LoginRequest) (*LoginReply, error)
 	Register(context.Context, *RegisterRequest) (*RegisterReply, error)
+	SampleProtected(context.Context, *ProtectedRequest) (*ProtectedReply, error)
 	mustEmbedUnimplementedAuthServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedAuthServer) Login(context.Context, *LoginRequest) (*LoginRepl
 }
 func (UnimplementedAuthServer) Register(context.Context, *RegisterRequest) (*RegisterReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Register not implemented")
+}
+func (UnimplementedAuthServer) SampleProtected(context.Context, *ProtectedRequest) (*ProtectedReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SampleProtected not implemented")
 }
 func (UnimplementedAuthServer) mustEmbedUnimplementedAuthServer() {}
 func (UnimplementedAuthServer) testEmbeddedByValue()              {}
@@ -138,6 +154,24 @@ func _Auth_Register_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Auth_SampleProtected_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProtectedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServer).SampleProtected(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Auth_SampleProtected_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServer).SampleProtected(ctx, req.(*ProtectedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Auth_ServiceDesc is the grpc.ServiceDesc for Auth service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var Auth_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Register",
 			Handler:    _Auth_Register_Handler,
+		},
+		{
+			MethodName: "SampleProtected",
+			Handler:    _Auth_SampleProtected_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
