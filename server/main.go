@@ -57,8 +57,13 @@ type Server struct {
 }
 
 func (s *Server) SampleProtected(ctx context.Context, in *pb.ProtectedRequest) (*pb.ProtectedReply, error) {
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("missing metadata")
+	}
+	current_user := md["current_user"]
 	return &pb.ProtectedReply{
-		Result: in.Text + "!",
+		Result: in.Text + " " + current_user[0],
 	}, nil
 }
 
@@ -124,11 +129,11 @@ func authUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Unary
 		return nil, fmt.Errorf("missing token")
 	}
 
-	_, err := verifyJWT(token[0])
+	claims, err := verifyJWT(token[0])
+	ctx = metadata.AppendToOutgoingContext(ctx, "current_user", claims.Email)
 	if err != nil {
 		return nil, fmt.Errorf("unauthorized: %v", err)
 	}
-
 	return handler(ctx, req)
 }
 
