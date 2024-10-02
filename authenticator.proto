@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package authenticator;
+option go_package="authenticator/protos";
+service Auth{
+    rpc Login (LoginRequest) returns (LoginReply) {}
+    rpc Register (RegisterRequest) returns (RegisterReply) {}
+}
+
+message LoginRequest {
+    string email = 1;
+    string password = 2;
+}
+
+message RegisterRequest {
+    string email = 1;
+    string password = 2;
+    string name = 3;
+    string surname = 4;
+    int32 age = 5;
+}
+
+message LoginReply {
+    string token = 1;
+}
+
+message RegisterReply {
+    string reply = 1;
+}
