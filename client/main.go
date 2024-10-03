@@ -1,7 +1,7 @@
 package main
 
 import (
-	. "authenticator"
+	. "backend"
 	"context"
 	"fmt"
 	"log"
@@ -19,6 +19,7 @@ func main() {
 	defer conn.Close()
 
 	client := NewAuthClient(conn)
+
 	loginReply, err := client.Login(context.Background(), &LoginRequest{
 		Email:    "alic2e@example.com",
 		Password: "password",
@@ -38,4 +39,31 @@ func main() {
 		log.Fatalf("SampleProtected failed: %v", err)
 	}
 	fmt.Println("SampleProtected response:", protectedReply.Result)
+	postClient := NewPostsClient(conn)
+	postReply, err := postClient.CreatePost(ctx, &CreatePostRequest{
+		Title: "Hello from client",
+		Text:  "Hello from client",
+	})
+	if err != nil {
+		log.Fatalf("CreatePost failed: %v", err)
+	}
+	fmt.Println("CreatePost response:", postReply)
+	postReply, err = postClient.ReadPost(ctx, &ReadPostRequest{
+		Id: postReply.Id,
+	})
+	if err != nil {
+		log.Fatalf("GetPost failed: %v", err)
+	}
+	fmt.Println("GetPost response:", postReply)
+
+	postReply, err = postClient.UpdatePost(ctx, &UpdatePostRequest{
+		Id:    postReply.Id,
+		Title: "Hello from client updated",
+		Text:  "Hello from client updated",
+	})
+	if err != nil {
+		log.Fatalf("UpdatePost failed: %v", err)
+	}
+	fmt.Println("UpdatePost response:", postReply)
+
 }

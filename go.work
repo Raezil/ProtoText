@@ -2,6 +2,6 @@ go 1.22.2
 
 use (
     .
-    ./authenticator
+    ./backend
     ./db
 )
