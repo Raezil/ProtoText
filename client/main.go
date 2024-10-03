@@ -19,9 +19,15 @@ func main() {
 	defer conn.Close()
 
 	client := NewAuthClient(conn)
-
+	_, err = client.Register(context.Background(), &RegisterRequest{
+		Email:    "alic22e@example.com",
+		Password: "password",
+	})
+	if err != nil {
+		log.Fatalf("Register should have failed")
+	}
 	loginReply, err := client.Login(context.Background(), &LoginRequest{
-		Email:    "alic2e@example.com",
+		Email:    "alic22e@example.com",
 		Password: "password",
 	})
 	if err != nil {
