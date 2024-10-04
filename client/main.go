@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := grpc.Dial("localhost:8080", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}
@@ -20,7 +20,7 @@ func main() {
 
 	client := NewAuthClient(conn)
 	_, err = client.Register(context.Background(), &RegisterRequest{
-		Email:    "alic22e@example.com",
+		Email:    "alic22242e@example.com",
 		Password: "password",
 	})
 	if err != nil {

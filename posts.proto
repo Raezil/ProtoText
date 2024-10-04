@@ -1,31 +1,49 @@
 syntax = "proto3";
 
 package posts;
-option go_package="posts/protos";
-service Posts{
-    rpc CreatePost (CreatePostRequest) returns (PostReply) {}
-    rpc UpdatePost (UpdatePostRequest) returns (PostReply) {}
-    rpc ReadPost (ReadPostRequest) returns (PostReply) {}
+
+option go_package = "posts/protos";
+
+import "google/api/annotations.proto";
+
+service Posts {
+    rpc CreatePost (CreatePostRequest) returns (PostReply) {
+        option (google.api.http) = {
+            post: "/v1/posts"
+            body: "*"
+        };
+    }
+    rpc UpdatePost (UpdatePostRequest) returns (PostReply) {
+        option (google.api.http) = {
+            put: "/v1/posts/{id}"
+            body: "*"
+        };
+    }
+    rpc ReadPost (ReadPostRequest) returns (PostReply) {
+        option (google.api.http) = {
+            get: "/v1/posts/{id}"
+        };
+    }
 }
 
-message CreatePostRequest{
+message CreatePostRequest {
     string text = 1;
     string title = 2;
     string author = 3;
 }
 
-message UpdatePostRequest{
+message UpdatePostRequest {
     string id = 1;
     string text = 2;
     string title = 3;
     string author = 4;
 }
 
-message ReadPostRequest{
+message ReadPostRequest {
     string id = 1;
 }
 
-message PostReply{
+message PostReply {
     string id = 1;
     string title = 2;
     string content = 3;

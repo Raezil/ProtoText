@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -34,6 +37,10 @@ func authUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Unary
 }
 
 func main() {
+	lis, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		log.Fatalln("Failed to listen:", err)
+	}
 	client := db.NewClient()
 	if err := client.Prisma.Connect(); err != nil {
 		panic(err)
@@ -54,15 +61,34 @@ func main() {
 		PrismaClient: client,
 	})
 
-	// Rejestracja serwisu Auth na serwerze
+	log.Println("Serving gRPC on 0.0.0.0:8080")
+	go func() {
+		log.Fatalln(grpcServer.Serve(lis))
+	}()
 
-	listener, err := net.Listen("tcp", ":50051")
+	conn, err := grpc.NewClient(
+		"0.0.0.0:8080",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		log.Fatalln("Failed to dial server:", err)
 	}
 
-	if err := grpcServer.Serve(listener); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+	gwmux := runtime.NewServeMux()
+	// Register Greeter
+	err = pb.RegisterAuthHandler(context.Background(), gwmux, conn)
+	if err != nil {
+		log.Fatalln("Failed to register gateway:", err)
+	}
+	err = pb.RegisterPostsHandler(context.Background(), gwmux, conn)
+	if err != nil {
+		log.Fatalln("Failed to register gateway:", err)
+	}
+	gwServer := &http.Server{
+		Addr:    ":8090",
+		Handler: gwmux,
 	}
 
+	log.Println("Serving gRPC-Gateway on http://0.0.0.0:8090")
+	log.Fatalln(gwServer.ListenAndServe())
 }
