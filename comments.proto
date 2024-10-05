@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package comments;
+
+option go_package = "comments/protos";
+
+import "google/api/annotations.proto";
+
+service Comments {
+    rpc CreateComment (CreateCommentRequest) returns (CommentReply) {
+        option (google.api.http) = {
+            post: "/v1/comments"
+            body: "*"
+        };
+    }
+    rpc UpdateComment (UpdateCommentRequest) returns (CommentReply) {
+        option (google.api.http) = {
+            put: "/v1/comments/{id}"
+            body: "*"
+        };
+    }
+    rpc ReadComment (ReadCommentRequest) returns (CommentReply) {
+        option (google.api.http) = {
+            get: "/v1/comments/{id}"
+        };
+    }
+}
+
+message CreateCommentRequest {
+    string postID = 1;
+    string text = 2;
+    string author = 3;
+}
+
+message UpdateCommentRequest {
+    string id = 1;
+    string text = 2;
+    string author = 3;
+}
+
+message ReadCommentRequest {
+    string id = 1;
+}
+
+message CommentReply {
+    string id = 1;
+    string content = 2;
+    string author = 3;
+}
