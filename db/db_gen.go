@@ -73,8 +73,7 @@ const (
 const datasources = `[{"name":"db","provider":"sqlite","activeProvider":"sqlite","url":{"fromEnvVar":"","value":"file:dev.db"},"config":null}]`
 
 const schema = `datasource db {
-  // could be postgresql or mysql
-  provider = "sqlite"
+  provider = "sqlite" // or "postgresql", "mysql", etc.
   url      = "file:dev.db"
 }
 
@@ -83,14 +82,15 @@ generator db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   name      String
   password  String
-  email     String   @unique
+  email     String    @unique
   desc      String?
   post      Post[]
+  comments  Comment[] // Opposite relation field added
 }
 
 model Post {
@@ -99,8 +99,20 @@ model Post {
   content   String
   title     String
 
-  author   User   @relation(fields: [authorID], references: [id])
+  author   User      @relation(fields: [authorID], references: [id])
   authorID String
+  comments Comment[]
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  content   String
+
+  post   Post   @relation(fields: [postID], references: [id])
+  postID String
+  user   User   @relation(fields: [userID], references: [id])
+  userID String
 }
 `
 const schemaDatasourceURL = "file:dev.db"
@@ -175,6 +187,7 @@ func newClient() *PrismaClient {
 	c := &PrismaClient{}
 	c.User = userActions{client: c}
 	c.Post = postActions{client: c}
+	c.Comment = commentActions{client: c}
 
 	c.Prisma = &PrismaActions{
 		Raw: &raw.Raw{Engine: c},
@@ -203,6 +216,8 @@ type PrismaClient struct {
 	User userActions
 	// Post provides access to CRUD methods.
 	Post postActions
+	// Comment provides access to CRUD methods.
+	Comment commentActions
 }
 
 // --- template enums.gotpl ---
@@ -233,6 +248,16 @@ const (
 	PostScalarFieldEnumContent   PostScalarFieldEnum = "content"
 	PostScalarFieldEnumTitle     PostScalarFieldEnum = "title"
 	PostScalarFieldEnumAuthorID  PostScalarFieldEnum = "authorID"
+)
+
+type CommentScalarFieldEnum string
+
+const (
+	CommentScalarFieldEnumID        CommentScalarFieldEnum = "id"
+	CommentScalarFieldEnumCreatedAt CommentScalarFieldEnum = "createdAt"
+	CommentScalarFieldEnumContent   CommentScalarFieldEnum = "content"
+	CommentScalarFieldEnumPostID    CommentScalarFieldEnum = "postID"
+	CommentScalarFieldEnumUserID    CommentScalarFieldEnum = "userID"
 )
 
 type SortOrder string
@@ -298,6 +323,8 @@ const userFieldDesc userPrismaFields = "desc"
 
 const userFieldPost userPrismaFields = "post"
 
+const userFieldComments userPrismaFields = "comments"
+
 type postPrismaFields = prismaFields
 
 const postFieldID postPrismaFields = "id"
@@ -311,6 +338,24 @@ const postFieldTitle postPrismaFields = "title"
 const postFieldAuthor postPrismaFields = "author"
 
 const postFieldAuthorID postPrismaFields = "authorID"
+
+const postFieldComments postPrismaFields = "comments"
+
+type commentPrismaFields = prismaFields
+
+const commentFieldID commentPrismaFields = "id"
+
+const commentFieldCreatedAt commentPrismaFields = "createdAt"
+
+const commentFieldContent commentPrismaFields = "content"
+
+const commentFieldPost commentPrismaFields = "post"
+
+const commentFieldPostID commentPrismaFields = "postID"
+
+const commentFieldUser commentPrismaFields = "user"
+
+const commentFieldUserID commentPrismaFields = "userID"
 
 // --- template mock.gotpl ---
 func NewMock() (*PrismaClient, *Mock, func(t *testing.T)) {
@@ -330,6 +375,10 @@ func NewMock() (*PrismaClient, *Mock, func(t *testing.T)) {
 		mock: m,
 	}
 
+	m.Comment = commentMock{
+		mock: m,
+	}
+
 	return pc, m, m.Ensure
 }
 
@@ -339,6 +388,8 @@ type Mock struct {
 	User userMock
 
 	Post postMock
+
+	Comment commentMock
 }
 
 type userMock struct {
@@ -425,6 +476,48 @@ func (m *postMockExec) Errors(err error) {
 	})
 }
 
+type commentMock struct {
+	mock *Mock
+}
+
+type CommentMockExpectParam interface {
+	ExtractQuery() builder.Query
+	commentModel()
+}
+
+func (m *commentMock) Expect(query CommentMockExpectParam) *commentMockExec {
+	return &commentMockExec{
+		mock:  m.mock,
+		query: query.ExtractQuery(),
+	}
+}
+
+type commentMockExec struct {
+	mock  *Mock
+	query builder.Query
+}
+
+func (m *commentMockExec) Returns(v CommentModel) {
+	*m.mock.Expectations = append(*m.mock.Expectations, mock.Expectation{
+		Query: m.query,
+		Want:  &v,
+	})
+}
+
+func (m *commentMockExec) ReturnsMany(v []CommentModel) {
+	*m.mock.Expectations = append(*m.mock.Expectations, mock.Expectation{
+		Query: m.query,
+		Want:  &v,
+	})
+}
+
+func (m *commentMockExec) Errors(err error) {
+	*m.mock.Expectations = append(*m.mock.Expectations, mock.Expectation{
+		Query:   m.query,
+		WantErr: err,
+	})
+}
+
 // --- template models.gotpl ---
 
 // UserModel represents the User model and is a wrapper for accessing fields and methods
@@ -457,7 +550,8 @@ type RawUserModel struct {
 
 // RelationsUser holds the relation data separately
 type RelationsUser struct {
-	Post []PostModel `json:"post,omitempty"`
+	Post     []PostModel    `json:"post,omitempty"`
+	Comments []CommentModel `json:"comments,omitempty"`
 }
 
 func (r UserModel) Desc() (value String, ok bool) {
@@ -472,6 +566,13 @@ func (r UserModel) Post() (value []PostModel) {
 		panic("attempted to access post but did not fetch it using the .With() syntax")
 	}
 	return r.RelationsUser.Post
+}
+
+func (r UserModel) Comments() (value []CommentModel) {
+	if r.RelationsUser.Comments == nil {
+		panic("attempted to access comments but did not fetch it using the .With() syntax")
+	}
+	return r.RelationsUser.Comments
 }
 
 // PostModel represents the Post model and is a wrapper for accessing fields and methods
@@ -500,7 +601,8 @@ type RawPostModel struct {
 
 // RelationsPost holds the relation data separately
 type RelationsPost struct {
-	Author *UserModel `json:"author,omitempty"`
+	Author   *UserModel     `json:"author,omitempty"`
+	Comments []CommentModel `json:"comments,omitempty"`
 }
 
 func (r PostModel) Author() (value *UserModel) {
@@ -508,6 +610,57 @@ func (r PostModel) Author() (value *UserModel) {
 		panic("attempted to access author but did not fetch it using the .With() syntax")
 	}
 	return r.RelationsPost.Author
+}
+
+func (r PostModel) Comments() (value []CommentModel) {
+	if r.RelationsPost.Comments == nil {
+		panic("attempted to access comments but did not fetch it using the .With() syntax")
+	}
+	return r.RelationsPost.Comments
+}
+
+// CommentModel represents the Comment model and is a wrapper for accessing fields and methods
+type CommentModel struct {
+	InnerComment
+	RelationsComment
+}
+
+// InnerComment holds the actual data
+type InnerComment struct {
+	ID        string   `json:"id"`
+	CreatedAt DateTime `json:"createdAt"`
+	Content   string   `json:"content"`
+	PostID    string   `json:"postID"`
+	UserID    string   `json:"userID"`
+}
+
+// RawCommentModel is a struct for Comment when used in raw queries
+type RawCommentModel struct {
+	ID        RawString   `json:"id"`
+	CreatedAt RawDateTime `json:"createdAt"`
+	Content   RawString   `json:"content"`
+	PostID    RawString   `json:"postID"`
+	UserID    RawString   `json:"userID"`
+}
+
+// RelationsComment holds the relation data separately
+type RelationsComment struct {
+	Post *PostModel `json:"post,omitempty"`
+	User *UserModel `json:"user,omitempty"`
+}
+
+func (r CommentModel) Post() (value *PostModel) {
+	if r.RelationsComment.Post == nil {
+		panic("attempted to access post but did not fetch it using the .With() syntax")
+	}
+	return r.RelationsComment.Post
+}
+
+func (r CommentModel) User() (value *UserModel) {
+	if r.RelationsComment.User == nil {
+		panic("attempted to access user but did not fetch it using the .With() syntax")
+	}
+	return r.RelationsComment.User
 }
 
 // --- template query.gotpl ---
@@ -555,6 +708,8 @@ type userQuery struct {
 	Desc userQueryDescString
 
 	Post userQueryPostRelations
+
+	Comments userQueryCommentsRelations
 }
 
 func (userQuery) Not(params ...UserWhereParam) userDefaultParam {
@@ -3077,6 +3232,178 @@ func (r userQueryPostPost) Field() userPrismaFields {
 	return userFieldPost
 }
 
+// base struct
+type userQueryCommentsComment struct{}
+
+type userQueryCommentsRelations struct{}
+
+// User -> Comments
+//
+// @relation
+// @required
+func (userQueryCommentsRelations) Some(
+	params ...CommentWhereParam,
+) userDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return userDefaultParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "some",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+// User -> Comments
+//
+// @relation
+// @required
+func (userQueryCommentsRelations) Every(
+	params ...CommentWhereParam,
+) userDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return userDefaultParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "every",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+// User -> Comments
+//
+// @relation
+// @required
+func (userQueryCommentsRelations) None(
+	params ...CommentWhereParam,
+) userDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return userDefaultParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "none",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+func (userQueryCommentsRelations) Fetch(
+
+	params ...CommentWhereParam,
+
+) userToCommentsFindMany {
+	var v userToCommentsFindMany
+
+	v.query.Operation = "query"
+	v.query.Method = "comments"
+	v.query.Outputs = commentOutput
+
+	var where []builder.Field
+	for _, q := range params {
+		if query := q.getQuery(); query.Operation != "" {
+			v.query.Outputs = append(v.query.Outputs, builder.Output{
+				Name:    query.Method,
+				Inputs:  query.Inputs,
+				Outputs: query.Outputs,
+			})
+		} else {
+			where = append(where, q.field())
+		}
+	}
+
+	if len(where) > 0 {
+		v.query.Inputs = append(v.query.Inputs, builder.Input{
+			Name:   "where",
+			Fields: where,
+		})
+	}
+
+	return v
+}
+
+func (r userQueryCommentsRelations) Link(
+	params ...CommentWhereParam,
+) userSetParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return userSetParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "connect",
+					Fields: builder.TransformEquals(fields),
+
+					List:     true,
+					WrapList: true,
+				},
+			},
+		},
+	}
+}
+
+func (r userQueryCommentsRelations) Unlink(
+	params ...CommentWhereParam,
+) userSetParam {
+	var v userSetParam
+
+	var fields []builder.Field
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+	v = userSetParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:     "disconnect",
+					List:     true,
+					WrapList: true,
+					Fields:   builder.TransformEquals(fields),
+				},
+			},
+		},
+	}
+
+	return v
+}
+
+func (r userQueryCommentsComment) Field() userPrismaFields {
+	return userFieldComments
+}
+
 // Post acts as a namespaces to access query methods for the Post model
 var Post = postQuery{}
 
@@ -3109,6 +3436,8 @@ type postQuery struct {
 	//
 	// @required
 	AuthorID postQueryAuthorIDString
+
+	Comments postQueryCommentsRelations
 }
 
 func (postQuery) Not(params ...PostWhereParam) postDefaultParam {
@@ -4865,6 +5194,2056 @@ func (r postQueryAuthorIDString) Field() postPrismaFields {
 	return postFieldAuthorID
 }
 
+// base struct
+type postQueryCommentsComment struct{}
+
+type postQueryCommentsRelations struct{}
+
+// Post -> Comments
+//
+// @relation
+// @required
+func (postQueryCommentsRelations) Some(
+	params ...CommentWhereParam,
+) postDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return postDefaultParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "some",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+// Post -> Comments
+//
+// @relation
+// @required
+func (postQueryCommentsRelations) Every(
+	params ...CommentWhereParam,
+) postDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return postDefaultParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "every",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+// Post -> Comments
+//
+// @relation
+// @required
+func (postQueryCommentsRelations) None(
+	params ...CommentWhereParam,
+) postDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return postDefaultParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "none",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+func (postQueryCommentsRelations) Fetch(
+
+	params ...CommentWhereParam,
+
+) postToCommentsFindMany {
+	var v postToCommentsFindMany
+
+	v.query.Operation = "query"
+	v.query.Method = "comments"
+	v.query.Outputs = commentOutput
+
+	var where []builder.Field
+	for _, q := range params {
+		if query := q.getQuery(); query.Operation != "" {
+			v.query.Outputs = append(v.query.Outputs, builder.Output{
+				Name:    query.Method,
+				Inputs:  query.Inputs,
+				Outputs: query.Outputs,
+			})
+		} else {
+			where = append(where, q.field())
+		}
+	}
+
+	if len(where) > 0 {
+		v.query.Inputs = append(v.query.Inputs, builder.Input{
+			Name:   "where",
+			Fields: where,
+		})
+	}
+
+	return v
+}
+
+func (r postQueryCommentsRelations) Link(
+	params ...CommentWhereParam,
+) postSetParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return postSetParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:   "connect",
+					Fields: builder.TransformEquals(fields),
+
+					List:     true,
+					WrapList: true,
+				},
+			},
+		},
+	}
+}
+
+func (r postQueryCommentsRelations) Unlink(
+	params ...CommentWhereParam,
+) postSetParam {
+	var v postSetParam
+
+	var fields []builder.Field
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+	v = postSetParam{
+		data: builder.Field{
+			Name: "comments",
+			Fields: []builder.Field{
+				{
+					Name:     "disconnect",
+					List:     true,
+					WrapList: true,
+					Fields:   builder.TransformEquals(fields),
+				},
+			},
+		},
+	}
+
+	return v
+}
+
+func (r postQueryCommentsComment) Field() postPrismaFields {
+	return postFieldComments
+}
+
+// Comment acts as a namespaces to access query methods for the Comment model
+var Comment = commentQuery{}
+
+// commentQuery exposes query functions for the comment model
+type commentQuery struct {
+
+	// ID
+	//
+	// @required
+	ID commentQueryIDString
+
+	// CreatedAt
+	//
+	// @required
+	CreatedAt commentQueryCreatedAtDateTime
+
+	// Content
+	//
+	// @required
+	Content commentQueryContentString
+
+	Post commentQueryPostRelations
+
+	// PostID
+	//
+	// @required
+	PostID commentQueryPostIDString
+
+	User commentQueryUserRelations
+
+	// UserID
+	//
+	// @required
+	UserID commentQueryUserIDString
+}
+
+func (commentQuery) Not(params ...CommentWhereParam) commentDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:     "NOT",
+			List:     true,
+			WrapList: true,
+			Fields:   fields,
+		},
+	}
+}
+
+func (commentQuery) Or(params ...CommentWhereParam) commentDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:     "OR",
+			List:     true,
+			WrapList: true,
+			Fields:   fields,
+		},
+	}
+}
+
+func (commentQuery) And(params ...CommentWhereParam) commentDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:     "AND",
+			List:     true,
+			WrapList: true,
+			Fields:   fields,
+		},
+	}
+}
+
+// base struct
+type commentQueryIDString struct{}
+
+// Set the required value of ID
+func (r commentQueryIDString) Set(value string) commentSetParam {
+
+	return commentSetParam{
+		data: builder.Field{
+			Name:  "id",
+			Value: value,
+		},
+	}
+
+}
+
+// Set the optional value of ID dynamically
+func (r commentQueryIDString) SetIfPresent(value *String) commentSetParam {
+	if value == nil {
+		return commentSetParam{}
+	}
+
+	return r.Set(*value)
+}
+
+func (r commentQueryIDString) Equals(value string) commentWithPrismaIDEqualsUniqueParam {
+
+	return commentWithPrismaIDEqualsUniqueParam{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "equals",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) EqualsIfPresent(value *string) commentWithPrismaIDEqualsUniqueParam {
+	if value == nil {
+		return commentWithPrismaIDEqualsUniqueParam{}
+	}
+	return r.Equals(*value)
+}
+
+func (r commentQueryIDString) Order(direction SortOrder) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:  "id",
+			Value: direction,
+		},
+	}
+}
+
+func (r commentQueryIDString) Cursor(cursor string) commentCursorParam {
+	return commentCursorParam{
+		data: builder.Field{
+			Name:  "id",
+			Value: cursor,
+		},
+	}
+}
+
+func (r commentQueryIDString) In(value []string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "in",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) InIfPresent(value []string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.In(value)
+}
+
+func (r commentQueryIDString) NotIn(value []string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "notIn",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) NotInIfPresent(value []string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.NotIn(value)
+}
+
+func (r commentQueryIDString) Lt(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "lt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) LtIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.Lt(*value)
+}
+
+func (r commentQueryIDString) Lte(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "lte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) LteIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.Lte(*value)
+}
+
+func (r commentQueryIDString) Gt(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "gt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) GtIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.Gt(*value)
+}
+
+func (r commentQueryIDString) Gte(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "gte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) GteIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.Gte(*value)
+}
+
+func (r commentQueryIDString) Contains(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "contains",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) ContainsIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.Contains(*value)
+}
+
+func (r commentQueryIDString) StartsWith(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "startsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) StartsWithIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.StartsWith(*value)
+}
+
+func (r commentQueryIDString) EndsWith(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "endsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) EndsWithIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.EndsWith(*value)
+}
+
+func (r commentQueryIDString) Not(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "not",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryIDString) NotIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.Not(*value)
+}
+
+// deprecated: Use StartsWith instead.
+
+func (r commentQueryIDString) HasPrefix(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "starts_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use StartsWithIfPresent instead.
+func (r commentQueryIDString) HasPrefixIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.HasPrefix(*value)
+}
+
+// deprecated: Use EndsWith instead.
+
+func (r commentQueryIDString) HasSuffix(value string) commentParamUnique {
+	return commentParamUnique{
+		data: builder.Field{
+			Name: "id",
+			Fields: []builder.Field{
+				{
+					Name:  "ends_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use EndsWithIfPresent instead.
+func (r commentQueryIDString) HasSuffixIfPresent(value *string) commentParamUnique {
+	if value == nil {
+		return commentParamUnique{}
+	}
+	return r.HasSuffix(*value)
+}
+
+func (r commentQueryIDString) Field() commentPrismaFields {
+	return commentFieldID
+}
+
+// base struct
+type commentQueryCreatedAtDateTime struct{}
+
+// Set the required value of CreatedAt
+func (r commentQueryCreatedAtDateTime) Set(value DateTime) commentSetParam {
+
+	return commentSetParam{
+		data: builder.Field{
+			Name:  "createdAt",
+			Value: value,
+		},
+	}
+
+}
+
+// Set the optional value of CreatedAt dynamically
+func (r commentQueryCreatedAtDateTime) SetIfPresent(value *DateTime) commentSetParam {
+	if value == nil {
+		return commentSetParam{}
+	}
+
+	return r.Set(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Equals(value DateTime) commentWithPrismaCreatedAtEqualsParam {
+
+	return commentWithPrismaCreatedAtEqualsParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "equals",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) EqualsIfPresent(value *DateTime) commentWithPrismaCreatedAtEqualsParam {
+	if value == nil {
+		return commentWithPrismaCreatedAtEqualsParam{}
+	}
+	return r.Equals(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Order(direction SortOrder) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:  "createdAt",
+			Value: direction,
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) Cursor(cursor DateTime) commentCursorParam {
+	return commentCursorParam{
+		data: builder.Field{
+			Name:  "createdAt",
+			Value: cursor,
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) In(value []DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "in",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) InIfPresent(value []DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.In(value)
+}
+
+func (r commentQueryCreatedAtDateTime) NotIn(value []DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "notIn",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) NotInIfPresent(value []DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.NotIn(value)
+}
+
+func (r commentQueryCreatedAtDateTime) Lt(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "lt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) LtIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lt(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Lte(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "lte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) LteIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lte(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Gt(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "gt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) GtIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gt(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Gte(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "gte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) GteIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gte(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Not(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "not",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryCreatedAtDateTime) NotIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Not(*value)
+}
+
+// deprecated: Use Lt instead.
+
+func (r commentQueryCreatedAtDateTime) Before(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "lt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use LtIfPresent instead.
+func (r commentQueryCreatedAtDateTime) BeforeIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Before(*value)
+}
+
+// deprecated: Use Gt instead.
+
+func (r commentQueryCreatedAtDateTime) After(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "gt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use GtIfPresent instead.
+func (r commentQueryCreatedAtDateTime) AfterIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.After(*value)
+}
+
+// deprecated: Use Lte instead.
+
+func (r commentQueryCreatedAtDateTime) BeforeEquals(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "lte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use LteIfPresent instead.
+func (r commentQueryCreatedAtDateTime) BeforeEqualsIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.BeforeEquals(*value)
+}
+
+// deprecated: Use Gte instead.
+
+func (r commentQueryCreatedAtDateTime) AfterEquals(value DateTime) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "createdAt",
+			Fields: []builder.Field{
+				{
+					Name:  "gte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use GteIfPresent instead.
+func (r commentQueryCreatedAtDateTime) AfterEqualsIfPresent(value *DateTime) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.AfterEquals(*value)
+}
+
+func (r commentQueryCreatedAtDateTime) Field() commentPrismaFields {
+	return commentFieldCreatedAt
+}
+
+// base struct
+type commentQueryContentString struct{}
+
+// Set the required value of Content
+func (r commentQueryContentString) Set(value string) commentWithPrismaContentSetParam {
+
+	return commentWithPrismaContentSetParam{
+		data: builder.Field{
+			Name:  "content",
+			Value: value,
+		},
+	}
+
+}
+
+// Set the optional value of Content dynamically
+func (r commentQueryContentString) SetIfPresent(value *String) commentWithPrismaContentSetParam {
+	if value == nil {
+		return commentWithPrismaContentSetParam{}
+	}
+
+	return r.Set(*value)
+}
+
+func (r commentQueryContentString) Equals(value string) commentWithPrismaContentEqualsParam {
+
+	return commentWithPrismaContentEqualsParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "equals",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) EqualsIfPresent(value *string) commentWithPrismaContentEqualsParam {
+	if value == nil {
+		return commentWithPrismaContentEqualsParam{}
+	}
+	return r.Equals(*value)
+}
+
+func (r commentQueryContentString) Order(direction SortOrder) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:  "content",
+			Value: direction,
+		},
+	}
+}
+
+func (r commentQueryContentString) Cursor(cursor string) commentCursorParam {
+	return commentCursorParam{
+		data: builder.Field{
+			Name:  "content",
+			Value: cursor,
+		},
+	}
+}
+
+func (r commentQueryContentString) In(value []string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "in",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) InIfPresent(value []string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.In(value)
+}
+
+func (r commentQueryContentString) NotIn(value []string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "notIn",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) NotInIfPresent(value []string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.NotIn(value)
+}
+
+func (r commentQueryContentString) Lt(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "lt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) LtIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lt(*value)
+}
+
+func (r commentQueryContentString) Lte(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "lte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) LteIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lte(*value)
+}
+
+func (r commentQueryContentString) Gt(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "gt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) GtIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gt(*value)
+}
+
+func (r commentQueryContentString) Gte(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "gte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) GteIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gte(*value)
+}
+
+func (r commentQueryContentString) Contains(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "contains",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) ContainsIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Contains(*value)
+}
+
+func (r commentQueryContentString) StartsWith(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "startsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) StartsWithIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.StartsWith(*value)
+}
+
+func (r commentQueryContentString) EndsWith(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "endsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) EndsWithIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.EndsWith(*value)
+}
+
+func (r commentQueryContentString) Not(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "not",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryContentString) NotIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Not(*value)
+}
+
+// deprecated: Use StartsWith instead.
+
+func (r commentQueryContentString) HasPrefix(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "starts_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use StartsWithIfPresent instead.
+func (r commentQueryContentString) HasPrefixIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.HasPrefix(*value)
+}
+
+// deprecated: Use EndsWith instead.
+
+func (r commentQueryContentString) HasSuffix(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "content",
+			Fields: []builder.Field{
+				{
+					Name:  "ends_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use EndsWithIfPresent instead.
+func (r commentQueryContentString) HasSuffixIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.HasSuffix(*value)
+}
+
+func (r commentQueryContentString) Field() commentPrismaFields {
+	return commentFieldContent
+}
+
+// base struct
+type commentQueryPostPost struct{}
+
+type commentQueryPostRelations struct{}
+
+// Comment -> Post
+//
+// @relation
+// @required
+func (commentQueryPostRelations) Where(
+	params ...PostWhereParam,
+) commentDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "post",
+			Fields: []builder.Field{
+				{
+					Name:   "is",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+func (commentQueryPostRelations) Fetch() commentToPostFindUnique {
+	var v commentToPostFindUnique
+
+	v.query.Operation = "query"
+	v.query.Method = "post"
+	v.query.Outputs = postOutput
+
+	return v
+}
+
+func (r commentQueryPostRelations) Link(
+	params PostWhereParam,
+) commentWithPrismaPostSetParam {
+	var fields []builder.Field
+
+	f := params.field()
+	if f.Fields == nil && f.Value == nil {
+		return commentWithPrismaPostSetParam{}
+	}
+
+	fields = append(fields, f)
+
+	return commentWithPrismaPostSetParam{
+		data: builder.Field{
+			Name: "post",
+			Fields: []builder.Field{
+				{
+					Name:   "connect",
+					Fields: builder.TransformEquals(fields),
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostRelations) Unlink() commentWithPrismaPostSetParam {
+	var v commentWithPrismaPostSetParam
+
+	v = commentWithPrismaPostSetParam{
+		data: builder.Field{
+			Name: "post",
+			Fields: []builder.Field{
+				{
+					Name:  "disconnect",
+					Value: true,
+				},
+			},
+		},
+	}
+
+	return v
+}
+
+func (r commentQueryPostPost) Field() commentPrismaFields {
+	return commentFieldPost
+}
+
+// base struct
+type commentQueryPostIDString struct{}
+
+// Set the required value of PostID
+func (r commentQueryPostIDString) Set(value string) commentSetParam {
+
+	return commentSetParam{
+		data: builder.Field{
+			Name:  "postID",
+			Value: value,
+		},
+	}
+
+}
+
+// Set the optional value of PostID dynamically
+func (r commentQueryPostIDString) SetIfPresent(value *String) commentSetParam {
+	if value == nil {
+		return commentSetParam{}
+	}
+
+	return r.Set(*value)
+}
+
+func (r commentQueryPostIDString) Equals(value string) commentWithPrismaPostIDEqualsParam {
+
+	return commentWithPrismaPostIDEqualsParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "equals",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) EqualsIfPresent(value *string) commentWithPrismaPostIDEqualsParam {
+	if value == nil {
+		return commentWithPrismaPostIDEqualsParam{}
+	}
+	return r.Equals(*value)
+}
+
+func (r commentQueryPostIDString) Order(direction SortOrder) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:  "postID",
+			Value: direction,
+		},
+	}
+}
+
+func (r commentQueryPostIDString) Cursor(cursor string) commentCursorParam {
+	return commentCursorParam{
+		data: builder.Field{
+			Name:  "postID",
+			Value: cursor,
+		},
+	}
+}
+
+func (r commentQueryPostIDString) In(value []string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "in",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) InIfPresent(value []string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.In(value)
+}
+
+func (r commentQueryPostIDString) NotIn(value []string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "notIn",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) NotInIfPresent(value []string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.NotIn(value)
+}
+
+func (r commentQueryPostIDString) Lt(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "lt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) LtIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lt(*value)
+}
+
+func (r commentQueryPostIDString) Lte(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "lte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) LteIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lte(*value)
+}
+
+func (r commentQueryPostIDString) Gt(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "gt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) GtIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gt(*value)
+}
+
+func (r commentQueryPostIDString) Gte(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "gte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) GteIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gte(*value)
+}
+
+func (r commentQueryPostIDString) Contains(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "contains",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) ContainsIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Contains(*value)
+}
+
+func (r commentQueryPostIDString) StartsWith(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "startsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) StartsWithIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.StartsWith(*value)
+}
+
+func (r commentQueryPostIDString) EndsWith(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "endsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) EndsWithIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.EndsWith(*value)
+}
+
+func (r commentQueryPostIDString) Not(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "not",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryPostIDString) NotIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Not(*value)
+}
+
+// deprecated: Use StartsWith instead.
+
+func (r commentQueryPostIDString) HasPrefix(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "starts_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use StartsWithIfPresent instead.
+func (r commentQueryPostIDString) HasPrefixIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.HasPrefix(*value)
+}
+
+// deprecated: Use EndsWith instead.
+
+func (r commentQueryPostIDString) HasSuffix(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "postID",
+			Fields: []builder.Field{
+				{
+					Name:  "ends_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use EndsWithIfPresent instead.
+func (r commentQueryPostIDString) HasSuffixIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.HasSuffix(*value)
+}
+
+func (r commentQueryPostIDString) Field() commentPrismaFields {
+	return commentFieldPostID
+}
+
+// base struct
+type commentQueryUserUser struct{}
+
+type commentQueryUserRelations struct{}
+
+// Comment -> User
+//
+// @relation
+// @required
+func (commentQueryUserRelations) Where(
+	params ...UserWhereParam,
+) commentDefaultParam {
+	var fields []builder.Field
+
+	for _, q := range params {
+		fields = append(fields, q.field())
+	}
+
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "user",
+			Fields: []builder.Field{
+				{
+					Name:   "is",
+					Fields: fields,
+				},
+			},
+		},
+	}
+}
+
+func (commentQueryUserRelations) Fetch() commentToUserFindUnique {
+	var v commentToUserFindUnique
+
+	v.query.Operation = "query"
+	v.query.Method = "user"
+	v.query.Outputs = userOutput
+
+	return v
+}
+
+func (r commentQueryUserRelations) Link(
+	params UserWhereParam,
+) commentWithPrismaUserSetParam {
+	var fields []builder.Field
+
+	f := params.field()
+	if f.Fields == nil && f.Value == nil {
+		return commentWithPrismaUserSetParam{}
+	}
+
+	fields = append(fields, f)
+
+	return commentWithPrismaUserSetParam{
+		data: builder.Field{
+			Name: "user",
+			Fields: []builder.Field{
+				{
+					Name:   "connect",
+					Fields: builder.TransformEquals(fields),
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserRelations) Unlink() commentWithPrismaUserSetParam {
+	var v commentWithPrismaUserSetParam
+
+	v = commentWithPrismaUserSetParam{
+		data: builder.Field{
+			Name: "user",
+			Fields: []builder.Field{
+				{
+					Name:  "disconnect",
+					Value: true,
+				},
+			},
+		},
+	}
+
+	return v
+}
+
+func (r commentQueryUserUser) Field() commentPrismaFields {
+	return commentFieldUser
+}
+
+// base struct
+type commentQueryUserIDString struct{}
+
+// Set the required value of UserID
+func (r commentQueryUserIDString) Set(value string) commentSetParam {
+
+	return commentSetParam{
+		data: builder.Field{
+			Name:  "userID",
+			Value: value,
+		},
+	}
+
+}
+
+// Set the optional value of UserID dynamically
+func (r commentQueryUserIDString) SetIfPresent(value *String) commentSetParam {
+	if value == nil {
+		return commentSetParam{}
+	}
+
+	return r.Set(*value)
+}
+
+func (r commentQueryUserIDString) Equals(value string) commentWithPrismaUserIDEqualsParam {
+
+	return commentWithPrismaUserIDEqualsParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "equals",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) EqualsIfPresent(value *string) commentWithPrismaUserIDEqualsParam {
+	if value == nil {
+		return commentWithPrismaUserIDEqualsParam{}
+	}
+	return r.Equals(*value)
+}
+
+func (r commentQueryUserIDString) Order(direction SortOrder) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name:  "userID",
+			Value: direction,
+		},
+	}
+}
+
+func (r commentQueryUserIDString) Cursor(cursor string) commentCursorParam {
+	return commentCursorParam{
+		data: builder.Field{
+			Name:  "userID",
+			Value: cursor,
+		},
+	}
+}
+
+func (r commentQueryUserIDString) In(value []string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "in",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) InIfPresent(value []string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.In(value)
+}
+
+func (r commentQueryUserIDString) NotIn(value []string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "notIn",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) NotInIfPresent(value []string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.NotIn(value)
+}
+
+func (r commentQueryUserIDString) Lt(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "lt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) LtIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lt(*value)
+}
+
+func (r commentQueryUserIDString) Lte(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "lte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) LteIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Lte(*value)
+}
+
+func (r commentQueryUserIDString) Gt(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "gt",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) GtIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gt(*value)
+}
+
+func (r commentQueryUserIDString) Gte(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "gte",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) GteIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Gte(*value)
+}
+
+func (r commentQueryUserIDString) Contains(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "contains",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) ContainsIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Contains(*value)
+}
+
+func (r commentQueryUserIDString) StartsWith(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "startsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) StartsWithIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.StartsWith(*value)
+}
+
+func (r commentQueryUserIDString) EndsWith(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "endsWith",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) EndsWithIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.EndsWith(*value)
+}
+
+func (r commentQueryUserIDString) Not(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "not",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+func (r commentQueryUserIDString) NotIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.Not(*value)
+}
+
+// deprecated: Use StartsWith instead.
+
+func (r commentQueryUserIDString) HasPrefix(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "starts_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use StartsWithIfPresent instead.
+func (r commentQueryUserIDString) HasPrefixIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.HasPrefix(*value)
+}
+
+// deprecated: Use EndsWith instead.
+
+func (r commentQueryUserIDString) HasSuffix(value string) commentDefaultParam {
+	return commentDefaultParam{
+		data: builder.Field{
+			Name: "userID",
+			Fields: []builder.Field{
+				{
+					Name:  "ends_with",
+					Value: value,
+				},
+			},
+		},
+	}
+}
+
+// deprecated: Use EndsWithIfPresent instead.
+func (r commentQueryUserIDString) HasSuffixIfPresent(value *string) commentDefaultParam {
+	if value == nil {
+		return commentDefaultParam{}
+	}
+	return r.HasSuffix(*value)
+}
+
+func (r commentQueryUserIDString) Field() commentPrismaFields {
+	return commentFieldUserID
+}
+
 // --- template actions.gotpl ---
 var countOutput = []builder.Output{
 	{Name: "count"},
@@ -5673,6 +8052,84 @@ func (p userWithPrismaPostEqualsUniqueParam) postField() {}
 func (userWithPrismaPostEqualsUniqueParam) unique() {}
 func (userWithPrismaPostEqualsUniqueParam) equals() {}
 
+type UserWithPrismaCommentsEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	userModel()
+	commentsField()
+}
+
+type UserWithPrismaCommentsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	userModel()
+	commentsField()
+}
+
+type userWithPrismaCommentsSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p userWithPrismaCommentsSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p userWithPrismaCommentsSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p userWithPrismaCommentsSetParam) userModel() {}
+
+func (p userWithPrismaCommentsSetParam) commentsField() {}
+
+type UserWithPrismaCommentsWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	userModel()
+	commentsField()
+}
+
+type userWithPrismaCommentsEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p userWithPrismaCommentsEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p userWithPrismaCommentsEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p userWithPrismaCommentsEqualsParam) userModel() {}
+
+func (p userWithPrismaCommentsEqualsParam) commentsField() {}
+
+func (userWithPrismaCommentsSetParam) settable()  {}
+func (userWithPrismaCommentsEqualsParam) equals() {}
+
+type userWithPrismaCommentsEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p userWithPrismaCommentsEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p userWithPrismaCommentsEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p userWithPrismaCommentsEqualsUniqueParam) userModel()     {}
+func (p userWithPrismaCommentsEqualsUniqueParam) commentsField() {}
+
+func (userWithPrismaCommentsEqualsUniqueParam) unique() {}
+func (userWithPrismaCommentsEqualsUniqueParam) equals() {}
+
 type postActions struct {
 	// client holds the prisma client
 	client *PrismaClient
@@ -6318,6 +8775,807 @@ func (p postWithPrismaAuthorIDEqualsUniqueParam) authorIDField() {}
 func (postWithPrismaAuthorIDEqualsUniqueParam) unique() {}
 func (postWithPrismaAuthorIDEqualsUniqueParam) equals() {}
 
+type PostWithPrismaCommentsEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	postModel()
+	commentsField()
+}
+
+type PostWithPrismaCommentsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	postModel()
+	commentsField()
+}
+
+type postWithPrismaCommentsSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p postWithPrismaCommentsSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p postWithPrismaCommentsSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p postWithPrismaCommentsSetParam) postModel() {}
+
+func (p postWithPrismaCommentsSetParam) commentsField() {}
+
+type PostWithPrismaCommentsWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	postModel()
+	commentsField()
+}
+
+type postWithPrismaCommentsEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p postWithPrismaCommentsEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p postWithPrismaCommentsEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p postWithPrismaCommentsEqualsParam) postModel() {}
+
+func (p postWithPrismaCommentsEqualsParam) commentsField() {}
+
+func (postWithPrismaCommentsSetParam) settable()  {}
+func (postWithPrismaCommentsEqualsParam) equals() {}
+
+type postWithPrismaCommentsEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p postWithPrismaCommentsEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p postWithPrismaCommentsEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p postWithPrismaCommentsEqualsUniqueParam) postModel()     {}
+func (p postWithPrismaCommentsEqualsUniqueParam) commentsField() {}
+
+func (postWithPrismaCommentsEqualsUniqueParam) unique() {}
+func (postWithPrismaCommentsEqualsUniqueParam) equals() {}
+
+type commentActions struct {
+	// client holds the prisma client
+	client *PrismaClient
+}
+
+var commentOutput = []builder.Output{
+	{Name: "id"},
+	{Name: "createdAt"},
+	{Name: "content"},
+	{Name: "postID"},
+	{Name: "userID"},
+}
+
+type CommentRelationWith interface {
+	getQuery() builder.Query
+	with()
+	commentRelation()
+}
+
+type CommentWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+}
+
+type commentDefaultParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentDefaultParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentDefaultParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentDefaultParam) commentModel() {}
+
+type CommentOrderByParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+}
+
+type commentOrderByParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentOrderByParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentOrderByParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentOrderByParam) commentModel() {}
+
+type CommentCursorParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	isCursor()
+}
+
+type commentCursorParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentCursorParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentCursorParam) isCursor() {}
+
+func (p commentCursorParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentCursorParam) commentModel() {}
+
+type CommentParamUnique interface {
+	field() builder.Field
+	getQuery() builder.Query
+	unique()
+	commentModel()
+}
+
+type commentParamUnique struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentParamUnique) commentModel() {}
+
+func (commentParamUnique) unique() {}
+
+func (p commentParamUnique) field() builder.Field {
+	return p.data
+}
+
+func (p commentParamUnique) getQuery() builder.Query {
+	return p.query
+}
+
+type CommentEqualsWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+}
+
+type commentEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentEqualsParam) commentModel() {}
+
+func (commentEqualsParam) equals() {}
+
+func (p commentEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+type CommentEqualsUniqueWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	unique()
+	commentModel()
+}
+
+type commentEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentEqualsUniqueParam) commentModel() {}
+
+func (commentEqualsUniqueParam) unique() {}
+func (commentEqualsUniqueParam) equals() {}
+
+func (p commentEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+type CommentSetParam interface {
+	field() builder.Field
+	settable()
+	commentModel()
+}
+
+type commentSetParam struct {
+	data builder.Field
+}
+
+func (commentSetParam) settable() {}
+
+func (p commentSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentSetParam) commentModel() {}
+
+type CommentWithPrismaIDEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	idField()
+}
+
+type CommentWithPrismaIDSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	idField()
+}
+
+type commentWithPrismaIDSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaIDSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaIDSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaIDSetParam) commentModel() {}
+
+func (p commentWithPrismaIDSetParam) idField() {}
+
+type CommentWithPrismaIDWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	idField()
+}
+
+type commentWithPrismaIDEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaIDEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaIDEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaIDEqualsParam) commentModel() {}
+
+func (p commentWithPrismaIDEqualsParam) idField() {}
+
+func (commentWithPrismaIDSetParam) settable()  {}
+func (commentWithPrismaIDEqualsParam) equals() {}
+
+type commentWithPrismaIDEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaIDEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaIDEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaIDEqualsUniqueParam) commentModel() {}
+func (p commentWithPrismaIDEqualsUniqueParam) idField()      {}
+
+func (commentWithPrismaIDEqualsUniqueParam) unique() {}
+func (commentWithPrismaIDEqualsUniqueParam) equals() {}
+
+type CommentWithPrismaCreatedAtEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	createdAtField()
+}
+
+type CommentWithPrismaCreatedAtSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	createdAtField()
+}
+
+type commentWithPrismaCreatedAtSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaCreatedAtSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaCreatedAtSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaCreatedAtSetParam) commentModel() {}
+
+func (p commentWithPrismaCreatedAtSetParam) createdAtField() {}
+
+type CommentWithPrismaCreatedAtWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	createdAtField()
+}
+
+type commentWithPrismaCreatedAtEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaCreatedAtEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaCreatedAtEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaCreatedAtEqualsParam) commentModel() {}
+
+func (p commentWithPrismaCreatedAtEqualsParam) createdAtField() {}
+
+func (commentWithPrismaCreatedAtSetParam) settable()  {}
+func (commentWithPrismaCreatedAtEqualsParam) equals() {}
+
+type commentWithPrismaCreatedAtEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaCreatedAtEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaCreatedAtEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaCreatedAtEqualsUniqueParam) commentModel()   {}
+func (p commentWithPrismaCreatedAtEqualsUniqueParam) createdAtField() {}
+
+func (commentWithPrismaCreatedAtEqualsUniqueParam) unique() {}
+func (commentWithPrismaCreatedAtEqualsUniqueParam) equals() {}
+
+type CommentWithPrismaContentEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	contentField()
+}
+
+type CommentWithPrismaContentSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	contentField()
+}
+
+type commentWithPrismaContentSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaContentSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaContentSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaContentSetParam) commentModel() {}
+
+func (p commentWithPrismaContentSetParam) contentField() {}
+
+type CommentWithPrismaContentWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	contentField()
+}
+
+type commentWithPrismaContentEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaContentEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaContentEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaContentEqualsParam) commentModel() {}
+
+func (p commentWithPrismaContentEqualsParam) contentField() {}
+
+func (commentWithPrismaContentSetParam) settable()  {}
+func (commentWithPrismaContentEqualsParam) equals() {}
+
+type commentWithPrismaContentEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaContentEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaContentEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaContentEqualsUniqueParam) commentModel() {}
+func (p commentWithPrismaContentEqualsUniqueParam) contentField() {}
+
+func (commentWithPrismaContentEqualsUniqueParam) unique() {}
+func (commentWithPrismaContentEqualsUniqueParam) equals() {}
+
+type CommentWithPrismaPostEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	postField()
+}
+
+type CommentWithPrismaPostSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	postField()
+}
+
+type commentWithPrismaPostSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaPostSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaPostSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaPostSetParam) commentModel() {}
+
+func (p commentWithPrismaPostSetParam) postField() {}
+
+type CommentWithPrismaPostWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	postField()
+}
+
+type commentWithPrismaPostEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaPostEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaPostEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaPostEqualsParam) commentModel() {}
+
+func (p commentWithPrismaPostEqualsParam) postField() {}
+
+func (commentWithPrismaPostSetParam) settable()  {}
+func (commentWithPrismaPostEqualsParam) equals() {}
+
+type commentWithPrismaPostEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaPostEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaPostEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaPostEqualsUniqueParam) commentModel() {}
+func (p commentWithPrismaPostEqualsUniqueParam) postField()    {}
+
+func (commentWithPrismaPostEqualsUniqueParam) unique() {}
+func (commentWithPrismaPostEqualsUniqueParam) equals() {}
+
+type CommentWithPrismaPostIDEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	postIDField()
+}
+
+type CommentWithPrismaPostIDSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	postIDField()
+}
+
+type commentWithPrismaPostIDSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaPostIDSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaPostIDSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaPostIDSetParam) commentModel() {}
+
+func (p commentWithPrismaPostIDSetParam) postIDField() {}
+
+type CommentWithPrismaPostIDWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	postIDField()
+}
+
+type commentWithPrismaPostIDEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaPostIDEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaPostIDEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaPostIDEqualsParam) commentModel() {}
+
+func (p commentWithPrismaPostIDEqualsParam) postIDField() {}
+
+func (commentWithPrismaPostIDSetParam) settable()  {}
+func (commentWithPrismaPostIDEqualsParam) equals() {}
+
+type commentWithPrismaPostIDEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaPostIDEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaPostIDEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaPostIDEqualsUniqueParam) commentModel() {}
+func (p commentWithPrismaPostIDEqualsUniqueParam) postIDField()  {}
+
+func (commentWithPrismaPostIDEqualsUniqueParam) unique() {}
+func (commentWithPrismaPostIDEqualsUniqueParam) equals() {}
+
+type CommentWithPrismaUserEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	userField()
+}
+
+type CommentWithPrismaUserSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	userField()
+}
+
+type commentWithPrismaUserSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaUserSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaUserSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaUserSetParam) commentModel() {}
+
+func (p commentWithPrismaUserSetParam) userField() {}
+
+type CommentWithPrismaUserWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	userField()
+}
+
+type commentWithPrismaUserEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaUserEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaUserEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaUserEqualsParam) commentModel() {}
+
+func (p commentWithPrismaUserEqualsParam) userField() {}
+
+func (commentWithPrismaUserSetParam) settable()  {}
+func (commentWithPrismaUserEqualsParam) equals() {}
+
+type commentWithPrismaUserEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaUserEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaUserEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaUserEqualsUniqueParam) commentModel() {}
+func (p commentWithPrismaUserEqualsUniqueParam) userField()    {}
+
+func (commentWithPrismaUserEqualsUniqueParam) unique() {}
+func (commentWithPrismaUserEqualsUniqueParam) equals() {}
+
+type CommentWithPrismaUserIDEqualsSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	equals()
+	commentModel()
+	userIDField()
+}
+
+type CommentWithPrismaUserIDSetParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	userIDField()
+}
+
+type commentWithPrismaUserIDSetParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaUserIDSetParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaUserIDSetParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaUserIDSetParam) commentModel() {}
+
+func (p commentWithPrismaUserIDSetParam) userIDField() {}
+
+type CommentWithPrismaUserIDWhereParam interface {
+	field() builder.Field
+	getQuery() builder.Query
+	commentModel()
+	userIDField()
+}
+
+type commentWithPrismaUserIDEqualsParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaUserIDEqualsParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaUserIDEqualsParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaUserIDEqualsParam) commentModel() {}
+
+func (p commentWithPrismaUserIDEqualsParam) userIDField() {}
+
+func (commentWithPrismaUserIDSetParam) settable()  {}
+func (commentWithPrismaUserIDEqualsParam) equals() {}
+
+type commentWithPrismaUserIDEqualsUniqueParam struct {
+	data  builder.Field
+	query builder.Query
+}
+
+func (p commentWithPrismaUserIDEqualsUniqueParam) field() builder.Field {
+	return p.data
+}
+
+func (p commentWithPrismaUserIDEqualsUniqueParam) getQuery() builder.Query {
+	return p.query
+}
+
+func (p commentWithPrismaUserIDEqualsUniqueParam) commentModel() {}
+func (p commentWithPrismaUserIDEqualsUniqueParam) userIDField()  {}
+
+func (commentWithPrismaUserIDEqualsUniqueParam) unique() {}
+func (commentWithPrismaUserIDEqualsUniqueParam) equals() {}
+
 // --- template create.gotpl ---
 
 // Creates a single user.
@@ -6459,6 +9717,78 @@ func (r postCreateOne) Exec(ctx context.Context) (*PostModel, error) {
 
 func (r postCreateOne) Tx() PostUniqueTxResult {
 	v := newPostUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+// Creates a single comment.
+func (r commentActions) CreateOne(
+	_content CommentWithPrismaContentSetParam,
+	_post CommentWithPrismaPostSetParam,
+	_user CommentWithPrismaUserSetParam,
+
+	optional ...CommentSetParam,
+) commentCreateOne {
+	var v commentCreateOne
+	v.query = builder.NewQuery()
+	v.query.Engine = r.client
+
+	v.query.Operation = "mutation"
+	v.query.Method = "createOne"
+	v.query.Model = "Comment"
+	v.query.Outputs = commentOutput
+
+	var fields []builder.Field
+
+	fields = append(fields, _content.field())
+	fields = append(fields, _post.field())
+	fields = append(fields, _user.field())
+
+	for _, q := range optional {
+		fields = append(fields, q.field())
+	}
+
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+func (r commentCreateOne) With(params ...CommentRelationWith) commentCreateOne {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+type commentCreateOne struct {
+	query builder.Query
+}
+
+func (p commentCreateOne) ExtractQuery() builder.Query {
+	return p.query
+}
+
+func (p commentCreateOne) commentModel() {}
+
+func (r commentCreateOne) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentCreateOne) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
 	v.query = r.query
 	v.query.TxResult = make(chan []byte, 1)
 	return v
@@ -7014,6 +10344,560 @@ func (r userToPostDeleteMany) Exec(ctx context.Context) (*BatchResult, error) {
 }
 
 func (r userToPostDeleteMany) Tx() UserManyTxResult {
+	v := newUserManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type userToCommentsFindUnique struct {
+	query builder.Query
+}
+
+func (r userToCommentsFindUnique) getQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsFindUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsFindUnique) with()         {}
+func (r userToCommentsFindUnique) userModel()    {}
+func (r userToCommentsFindUnique) userRelation() {}
+
+func (r userToCommentsFindUnique) With(params ...CommentRelationWith) userToCommentsFindUnique {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r userToCommentsFindUnique) Select(params ...userPrismaFields) userToCommentsFindUnique {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r userToCommentsFindUnique) Omit(params ...userPrismaFields) userToCommentsFindUnique {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range userOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r userToCommentsFindUnique) Exec(ctx context.Context) (
+	*UserModel,
+	error,
+) {
+	var v *UserModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r userToCommentsFindUnique) ExecInner(ctx context.Context) (
+	*InnerUser,
+	error,
+) {
+	var v *InnerUser
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r userToCommentsFindUnique) Update(params ...UserSetParam) userToCommentsUpdateUnique {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateOne"
+	r.query.Model = "User"
+
+	var v userToCommentsUpdateUnique
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type userToCommentsUpdateUnique struct {
+	query builder.Query
+}
+
+func (r userToCommentsUpdateUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsUpdateUnique) userModel() {}
+
+func (r userToCommentsUpdateUnique) Exec(ctx context.Context) (*UserModel, error) {
+	var v UserModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r userToCommentsUpdateUnique) Tx() UserUniqueTxResult {
+	v := newUserUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r userToCommentsFindUnique) Delete() userToCommentsDeleteUnique {
+	var v userToCommentsDeleteUnique
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteOne"
+	v.query.Model = "User"
+
+	return v
+}
+
+type userToCommentsDeleteUnique struct {
+	query builder.Query
+}
+
+func (r userToCommentsDeleteUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p userToCommentsDeleteUnique) userModel() {}
+
+func (r userToCommentsDeleteUnique) Exec(ctx context.Context) (*UserModel, error) {
+	var v UserModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r userToCommentsDeleteUnique) Tx() UserUniqueTxResult {
+	v := newUserUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type userToCommentsFindFirst struct {
+	query builder.Query
+}
+
+func (r userToCommentsFindFirst) getQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsFindFirst) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsFindFirst) with()         {}
+func (r userToCommentsFindFirst) userModel()    {}
+func (r userToCommentsFindFirst) userRelation() {}
+
+func (r userToCommentsFindFirst) With(params ...CommentRelationWith) userToCommentsFindFirst {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r userToCommentsFindFirst) Select(params ...userPrismaFields) userToCommentsFindFirst {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r userToCommentsFindFirst) Omit(params ...userPrismaFields) userToCommentsFindFirst {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range userOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r userToCommentsFindFirst) OrderBy(params ...CommentOrderByParam) userToCommentsFindFirst {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r userToCommentsFindFirst) Skip(count int) userToCommentsFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r userToCommentsFindFirst) Take(count int) userToCommentsFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r userToCommentsFindFirst) Cursor(cursor UserCursorParam) userToCommentsFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r userToCommentsFindFirst) Exec(ctx context.Context) (
+	*UserModel,
+	error,
+) {
+	var v *UserModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r userToCommentsFindFirst) ExecInner(ctx context.Context) (
+	*InnerUser,
+	error,
+) {
+	var v *InnerUser
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+type userToCommentsFindMany struct {
+	query builder.Query
+}
+
+func (r userToCommentsFindMany) getQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsFindMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsFindMany) with()         {}
+func (r userToCommentsFindMany) userModel()    {}
+func (r userToCommentsFindMany) userRelation() {}
+
+func (r userToCommentsFindMany) With(params ...CommentRelationWith) userToCommentsFindMany {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r userToCommentsFindMany) Select(params ...userPrismaFields) userToCommentsFindMany {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r userToCommentsFindMany) Omit(params ...userPrismaFields) userToCommentsFindMany {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range userOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r userToCommentsFindMany) OrderBy(params ...CommentOrderByParam) userToCommentsFindMany {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r userToCommentsFindMany) Skip(count int) userToCommentsFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r userToCommentsFindMany) Take(count int) userToCommentsFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r userToCommentsFindMany) Cursor(cursor UserCursorParam) userToCommentsFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r userToCommentsFindMany) Exec(ctx context.Context) (
+	[]UserModel,
+	error,
+) {
+	var v []UserModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r userToCommentsFindMany) ExecInner(ctx context.Context) (
+	[]InnerUser,
+	error,
+) {
+	var v []InnerUser
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r userToCommentsFindMany) Update(params ...UserSetParam) userToCommentsUpdateMany {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateMany"
+	r.query.Model = "User"
+
+	r.query.Outputs = countOutput
+
+	var v userToCommentsUpdateMany
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type userToCommentsUpdateMany struct {
+	query builder.Query
+}
+
+func (r userToCommentsUpdateMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r userToCommentsUpdateMany) userModel() {}
+
+func (r userToCommentsUpdateMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r userToCommentsUpdateMany) Tx() UserManyTxResult {
+	v := newUserManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r userToCommentsFindMany) Delete() userToCommentsDeleteMany {
+	var v userToCommentsDeleteMany
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteMany"
+	v.query.Model = "User"
+
+	v.query.Outputs = countOutput
+
+	return v
+}
+
+type userToCommentsDeleteMany struct {
+	query builder.Query
+}
+
+func (r userToCommentsDeleteMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p userToCommentsDeleteMany) userModel() {}
+
+func (r userToCommentsDeleteMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r userToCommentsDeleteMany) Tx() UserManyTxResult {
 	v := newUserManyTxResult()
 	v.query = r.query
 	v.query.TxResult = make(chan []byte, 1)
@@ -8224,6 +12108,560 @@ func (r postToAuthorDeleteMany) Tx() PostManyTxResult {
 	return v
 }
 
+type postToCommentsFindUnique struct {
+	query builder.Query
+}
+
+func (r postToCommentsFindUnique) getQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsFindUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsFindUnique) with()         {}
+func (r postToCommentsFindUnique) postModel()    {}
+func (r postToCommentsFindUnique) postRelation() {}
+
+func (r postToCommentsFindUnique) With(params ...CommentRelationWith) postToCommentsFindUnique {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r postToCommentsFindUnique) Select(params ...postPrismaFields) postToCommentsFindUnique {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r postToCommentsFindUnique) Omit(params ...postPrismaFields) postToCommentsFindUnique {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range postOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r postToCommentsFindUnique) Exec(ctx context.Context) (
+	*PostModel,
+	error,
+) {
+	var v *PostModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r postToCommentsFindUnique) ExecInner(ctx context.Context) (
+	*InnerPost,
+	error,
+) {
+	var v *InnerPost
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r postToCommentsFindUnique) Update(params ...PostSetParam) postToCommentsUpdateUnique {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateOne"
+	r.query.Model = "Post"
+
+	var v postToCommentsUpdateUnique
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type postToCommentsUpdateUnique struct {
+	query builder.Query
+}
+
+func (r postToCommentsUpdateUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsUpdateUnique) postModel() {}
+
+func (r postToCommentsUpdateUnique) Exec(ctx context.Context) (*PostModel, error) {
+	var v PostModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r postToCommentsUpdateUnique) Tx() PostUniqueTxResult {
+	v := newPostUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r postToCommentsFindUnique) Delete() postToCommentsDeleteUnique {
+	var v postToCommentsDeleteUnique
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteOne"
+	v.query.Model = "Post"
+
+	return v
+}
+
+type postToCommentsDeleteUnique struct {
+	query builder.Query
+}
+
+func (r postToCommentsDeleteUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p postToCommentsDeleteUnique) postModel() {}
+
+func (r postToCommentsDeleteUnique) Exec(ctx context.Context) (*PostModel, error) {
+	var v PostModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r postToCommentsDeleteUnique) Tx() PostUniqueTxResult {
+	v := newPostUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type postToCommentsFindFirst struct {
+	query builder.Query
+}
+
+func (r postToCommentsFindFirst) getQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsFindFirst) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsFindFirst) with()         {}
+func (r postToCommentsFindFirst) postModel()    {}
+func (r postToCommentsFindFirst) postRelation() {}
+
+func (r postToCommentsFindFirst) With(params ...CommentRelationWith) postToCommentsFindFirst {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r postToCommentsFindFirst) Select(params ...postPrismaFields) postToCommentsFindFirst {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r postToCommentsFindFirst) Omit(params ...postPrismaFields) postToCommentsFindFirst {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range postOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r postToCommentsFindFirst) OrderBy(params ...CommentOrderByParam) postToCommentsFindFirst {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r postToCommentsFindFirst) Skip(count int) postToCommentsFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r postToCommentsFindFirst) Take(count int) postToCommentsFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r postToCommentsFindFirst) Cursor(cursor PostCursorParam) postToCommentsFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r postToCommentsFindFirst) Exec(ctx context.Context) (
+	*PostModel,
+	error,
+) {
+	var v *PostModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r postToCommentsFindFirst) ExecInner(ctx context.Context) (
+	*InnerPost,
+	error,
+) {
+	var v *InnerPost
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+type postToCommentsFindMany struct {
+	query builder.Query
+}
+
+func (r postToCommentsFindMany) getQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsFindMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsFindMany) with()         {}
+func (r postToCommentsFindMany) postModel()    {}
+func (r postToCommentsFindMany) postRelation() {}
+
+func (r postToCommentsFindMany) With(params ...CommentRelationWith) postToCommentsFindMany {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r postToCommentsFindMany) Select(params ...postPrismaFields) postToCommentsFindMany {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r postToCommentsFindMany) Omit(params ...postPrismaFields) postToCommentsFindMany {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range postOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r postToCommentsFindMany) OrderBy(params ...CommentOrderByParam) postToCommentsFindMany {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r postToCommentsFindMany) Skip(count int) postToCommentsFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r postToCommentsFindMany) Take(count int) postToCommentsFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r postToCommentsFindMany) Cursor(cursor PostCursorParam) postToCommentsFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r postToCommentsFindMany) Exec(ctx context.Context) (
+	[]PostModel,
+	error,
+) {
+	var v []PostModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r postToCommentsFindMany) ExecInner(ctx context.Context) (
+	[]InnerPost,
+	error,
+) {
+	var v []InnerPost
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r postToCommentsFindMany) Update(params ...PostSetParam) postToCommentsUpdateMany {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateMany"
+	r.query.Model = "Post"
+
+	r.query.Outputs = countOutput
+
+	var v postToCommentsUpdateMany
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type postToCommentsUpdateMany struct {
+	query builder.Query
+}
+
+func (r postToCommentsUpdateMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r postToCommentsUpdateMany) postModel() {}
+
+func (r postToCommentsUpdateMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r postToCommentsUpdateMany) Tx() PostManyTxResult {
+	v := newPostManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r postToCommentsFindMany) Delete() postToCommentsDeleteMany {
+	var v postToCommentsDeleteMany
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteMany"
+	v.query.Model = "Post"
+
+	v.query.Outputs = countOutput
+
+	return v
+}
+
+type postToCommentsDeleteMany struct {
+	query builder.Query
+}
+
+func (r postToCommentsDeleteMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p postToCommentsDeleteMany) postModel() {}
+
+func (r postToCommentsDeleteMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r postToCommentsDeleteMany) Tx() PostManyTxResult {
+	v := newPostManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
 type postFindUnique struct {
 	query builder.Query
 }
@@ -8874,6 +13312,1764 @@ func (r postDeleteMany) Tx() PostManyTxResult {
 	return v
 }
 
+type commentToPostFindUnique struct {
+	query builder.Query
+}
+
+func (r commentToPostFindUnique) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostFindUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostFindUnique) with()            {}
+func (r commentToPostFindUnique) commentModel()    {}
+func (r commentToPostFindUnique) commentRelation() {}
+
+func (r commentToPostFindUnique) With(params ...PostRelationWith) commentToPostFindUnique {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentToPostFindUnique) Select(params ...commentPrismaFields) commentToPostFindUnique {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToPostFindUnique) Omit(params ...commentPrismaFields) commentToPostFindUnique {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToPostFindUnique) Exec(ctx context.Context) (
+	*CommentModel,
+	error,
+) {
+	var v *CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentToPostFindUnique) ExecInner(ctx context.Context) (
+	*InnerComment,
+	error,
+) {
+	var v *InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentToPostFindUnique) Update(params ...CommentSetParam) commentToPostUpdateUnique {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateOne"
+	r.query.Model = "Comment"
+
+	var v commentToPostUpdateUnique
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type commentToPostUpdateUnique struct {
+	query builder.Query
+}
+
+func (r commentToPostUpdateUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostUpdateUnique) commentModel() {}
+
+func (r commentToPostUpdateUnique) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToPostUpdateUnique) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r commentToPostFindUnique) Delete() commentToPostDeleteUnique {
+	var v commentToPostDeleteUnique
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteOne"
+	v.query.Model = "Comment"
+
+	return v
+}
+
+type commentToPostDeleteUnique struct {
+	query builder.Query
+}
+
+func (r commentToPostDeleteUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p commentToPostDeleteUnique) commentModel() {}
+
+func (r commentToPostDeleteUnique) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToPostDeleteUnique) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type commentToPostFindFirst struct {
+	query builder.Query
+}
+
+func (r commentToPostFindFirst) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostFindFirst) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostFindFirst) with()            {}
+func (r commentToPostFindFirst) commentModel()    {}
+func (r commentToPostFindFirst) commentRelation() {}
+
+func (r commentToPostFindFirst) With(params ...PostRelationWith) commentToPostFindFirst {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentToPostFindFirst) Select(params ...commentPrismaFields) commentToPostFindFirst {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToPostFindFirst) Omit(params ...commentPrismaFields) commentToPostFindFirst {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToPostFindFirst) OrderBy(params ...PostOrderByParam) commentToPostFindFirst {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r commentToPostFindFirst) Skip(count int) commentToPostFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToPostFindFirst) Take(count int) commentToPostFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToPostFindFirst) Cursor(cursor CommentCursorParam) commentToPostFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r commentToPostFindFirst) Exec(ctx context.Context) (
+	*CommentModel,
+	error,
+) {
+	var v *CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentToPostFindFirst) ExecInner(ctx context.Context) (
+	*InnerComment,
+	error,
+) {
+	var v *InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+type commentToPostFindMany struct {
+	query builder.Query
+}
+
+func (r commentToPostFindMany) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostFindMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostFindMany) with()            {}
+func (r commentToPostFindMany) commentModel()    {}
+func (r commentToPostFindMany) commentRelation() {}
+
+func (r commentToPostFindMany) With(params ...PostRelationWith) commentToPostFindMany {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentToPostFindMany) Select(params ...commentPrismaFields) commentToPostFindMany {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToPostFindMany) Omit(params ...commentPrismaFields) commentToPostFindMany {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToPostFindMany) OrderBy(params ...PostOrderByParam) commentToPostFindMany {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r commentToPostFindMany) Skip(count int) commentToPostFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToPostFindMany) Take(count int) commentToPostFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToPostFindMany) Cursor(cursor CommentCursorParam) commentToPostFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r commentToPostFindMany) Exec(ctx context.Context) (
+	[]CommentModel,
+	error,
+) {
+	var v []CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r commentToPostFindMany) ExecInner(ctx context.Context) (
+	[]InnerComment,
+	error,
+) {
+	var v []InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r commentToPostFindMany) Update(params ...CommentSetParam) commentToPostUpdateMany {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateMany"
+	r.query.Model = "Comment"
+
+	r.query.Outputs = countOutput
+
+	var v commentToPostUpdateMany
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type commentToPostUpdateMany struct {
+	query builder.Query
+}
+
+func (r commentToPostUpdateMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToPostUpdateMany) commentModel() {}
+
+func (r commentToPostUpdateMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToPostUpdateMany) Tx() CommentManyTxResult {
+	v := newCommentManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r commentToPostFindMany) Delete() commentToPostDeleteMany {
+	var v commentToPostDeleteMany
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteMany"
+	v.query.Model = "Comment"
+
+	v.query.Outputs = countOutput
+
+	return v
+}
+
+type commentToPostDeleteMany struct {
+	query builder.Query
+}
+
+func (r commentToPostDeleteMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p commentToPostDeleteMany) commentModel() {}
+
+func (r commentToPostDeleteMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToPostDeleteMany) Tx() CommentManyTxResult {
+	v := newCommentManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type commentToUserFindUnique struct {
+	query builder.Query
+}
+
+func (r commentToUserFindUnique) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserFindUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserFindUnique) with()            {}
+func (r commentToUserFindUnique) commentModel()    {}
+func (r commentToUserFindUnique) commentRelation() {}
+
+func (r commentToUserFindUnique) With(params ...UserRelationWith) commentToUserFindUnique {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentToUserFindUnique) Select(params ...commentPrismaFields) commentToUserFindUnique {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToUserFindUnique) Omit(params ...commentPrismaFields) commentToUserFindUnique {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToUserFindUnique) Exec(ctx context.Context) (
+	*CommentModel,
+	error,
+) {
+	var v *CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentToUserFindUnique) ExecInner(ctx context.Context) (
+	*InnerComment,
+	error,
+) {
+	var v *InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentToUserFindUnique) Update(params ...CommentSetParam) commentToUserUpdateUnique {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateOne"
+	r.query.Model = "Comment"
+
+	var v commentToUserUpdateUnique
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type commentToUserUpdateUnique struct {
+	query builder.Query
+}
+
+func (r commentToUserUpdateUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserUpdateUnique) commentModel() {}
+
+func (r commentToUserUpdateUnique) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToUserUpdateUnique) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r commentToUserFindUnique) Delete() commentToUserDeleteUnique {
+	var v commentToUserDeleteUnique
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteOne"
+	v.query.Model = "Comment"
+
+	return v
+}
+
+type commentToUserDeleteUnique struct {
+	query builder.Query
+}
+
+func (r commentToUserDeleteUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p commentToUserDeleteUnique) commentModel() {}
+
+func (r commentToUserDeleteUnique) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToUserDeleteUnique) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type commentToUserFindFirst struct {
+	query builder.Query
+}
+
+func (r commentToUserFindFirst) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserFindFirst) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserFindFirst) with()            {}
+func (r commentToUserFindFirst) commentModel()    {}
+func (r commentToUserFindFirst) commentRelation() {}
+
+func (r commentToUserFindFirst) With(params ...UserRelationWith) commentToUserFindFirst {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentToUserFindFirst) Select(params ...commentPrismaFields) commentToUserFindFirst {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToUserFindFirst) Omit(params ...commentPrismaFields) commentToUserFindFirst {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToUserFindFirst) OrderBy(params ...UserOrderByParam) commentToUserFindFirst {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r commentToUserFindFirst) Skip(count int) commentToUserFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToUserFindFirst) Take(count int) commentToUserFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToUserFindFirst) Cursor(cursor CommentCursorParam) commentToUserFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r commentToUserFindFirst) Exec(ctx context.Context) (
+	*CommentModel,
+	error,
+) {
+	var v *CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentToUserFindFirst) ExecInner(ctx context.Context) (
+	*InnerComment,
+	error,
+) {
+	var v *InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+type commentToUserFindMany struct {
+	query builder.Query
+}
+
+func (r commentToUserFindMany) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserFindMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserFindMany) with()            {}
+func (r commentToUserFindMany) commentModel()    {}
+func (r commentToUserFindMany) commentRelation() {}
+
+func (r commentToUserFindMany) With(params ...UserRelationWith) commentToUserFindMany {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentToUserFindMany) Select(params ...commentPrismaFields) commentToUserFindMany {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToUserFindMany) Omit(params ...commentPrismaFields) commentToUserFindMany {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentToUserFindMany) OrderBy(params ...UserOrderByParam) commentToUserFindMany {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r commentToUserFindMany) Skip(count int) commentToUserFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToUserFindMany) Take(count int) commentToUserFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentToUserFindMany) Cursor(cursor CommentCursorParam) commentToUserFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r commentToUserFindMany) Exec(ctx context.Context) (
+	[]CommentModel,
+	error,
+) {
+	var v []CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r commentToUserFindMany) ExecInner(ctx context.Context) (
+	[]InnerComment,
+	error,
+) {
+	var v []InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r commentToUserFindMany) Update(params ...CommentSetParam) commentToUserUpdateMany {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateMany"
+	r.query.Model = "Comment"
+
+	r.query.Outputs = countOutput
+
+	var v commentToUserUpdateMany
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type commentToUserUpdateMany struct {
+	query builder.Query
+}
+
+func (r commentToUserUpdateMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentToUserUpdateMany) commentModel() {}
+
+func (r commentToUserUpdateMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToUserUpdateMany) Tx() CommentManyTxResult {
+	v := newCommentManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r commentToUserFindMany) Delete() commentToUserDeleteMany {
+	var v commentToUserDeleteMany
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteMany"
+	v.query.Model = "Comment"
+
+	v.query.Outputs = countOutput
+
+	return v
+}
+
+type commentToUserDeleteMany struct {
+	query builder.Query
+}
+
+func (r commentToUserDeleteMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p commentToUserDeleteMany) commentModel() {}
+
+func (r commentToUserDeleteMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentToUserDeleteMany) Tx() CommentManyTxResult {
+	v := newCommentManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type commentFindUnique struct {
+	query builder.Query
+}
+
+func (r commentFindUnique) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentFindUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentFindUnique) with()            {}
+func (r commentFindUnique) commentModel()    {}
+func (r commentFindUnique) commentRelation() {}
+
+func (r commentActions) FindUnique(
+	params CommentEqualsUniqueWhereParam,
+) commentFindUnique {
+	var v commentFindUnique
+	v.query = builder.NewQuery()
+	v.query.Engine = r.client
+
+	v.query.Operation = "query"
+
+	v.query.Method = "findUnique"
+
+	v.query.Model = "Comment"
+	v.query.Outputs = commentOutput
+
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "where",
+		Fields: builder.TransformEquals([]builder.Field{params.field()}),
+	})
+
+	return v
+}
+
+func (r commentFindUnique) With(params ...CommentRelationWith) commentFindUnique {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentFindUnique) Select(params ...commentPrismaFields) commentFindUnique {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentFindUnique) Omit(params ...commentPrismaFields) commentFindUnique {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentFindUnique) Exec(ctx context.Context) (
+	*CommentModel,
+	error,
+) {
+	var v *CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentFindUnique) ExecInner(ctx context.Context) (
+	*InnerComment,
+	error,
+) {
+	var v *InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentFindUnique) Update(params ...CommentSetParam) commentUpdateUnique {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateOne"
+	r.query.Model = "Comment"
+
+	var v commentUpdateUnique
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type commentUpdateUnique struct {
+	query builder.Query
+}
+
+func (r commentUpdateUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentUpdateUnique) commentModel() {}
+
+func (r commentUpdateUnique) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentUpdateUnique) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r commentFindUnique) Delete() commentDeleteUnique {
+	var v commentDeleteUnique
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteOne"
+	v.query.Model = "Comment"
+
+	return v
+}
+
+type commentDeleteUnique struct {
+	query builder.Query
+}
+
+func (r commentDeleteUnique) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p commentDeleteUnique) commentModel() {}
+
+func (r commentDeleteUnique) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentDeleteUnique) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type commentFindFirst struct {
+	query builder.Query
+}
+
+func (r commentFindFirst) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentFindFirst) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentFindFirst) with()            {}
+func (r commentFindFirst) commentModel()    {}
+func (r commentFindFirst) commentRelation() {}
+
+func (r commentActions) FindFirst(
+	params ...CommentWhereParam,
+) commentFindFirst {
+	var v commentFindFirst
+	v.query = builder.NewQuery()
+	v.query.Engine = r.client
+
+	v.query.Operation = "query"
+
+	v.query.Method = "findFirst"
+
+	v.query.Model = "Comment"
+	v.query.Outputs = commentOutput
+
+	var where []builder.Field
+	for _, q := range params {
+		if query := q.getQuery(); query.Operation != "" {
+			v.query.Outputs = append(v.query.Outputs, builder.Output{
+				Name:    query.Method,
+				Inputs:  query.Inputs,
+				Outputs: query.Outputs,
+			})
+		} else {
+			where = append(where, q.field())
+		}
+	}
+
+	if len(where) > 0 {
+		v.query.Inputs = append(v.query.Inputs, builder.Input{
+			Name:   "where",
+			Fields: where,
+		})
+	}
+
+	return v
+}
+
+func (r commentFindFirst) With(params ...CommentRelationWith) commentFindFirst {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentFindFirst) Select(params ...commentPrismaFields) commentFindFirst {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentFindFirst) Omit(params ...commentPrismaFields) commentFindFirst {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentFindFirst) OrderBy(params ...CommentOrderByParam) commentFindFirst {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r commentFindFirst) Skip(count int) commentFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentFindFirst) Take(count int) commentFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentFindFirst) Cursor(cursor CommentCursorParam) commentFindFirst {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r commentFindFirst) Exec(ctx context.Context) (
+	*CommentModel,
+	error,
+) {
+	var v *CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+func (r commentFindFirst) ExecInner(ctx context.Context) (
+	*InnerComment,
+	error,
+) {
+	var v *InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		return nil, ErrNotFound
+	}
+
+	return v, nil
+}
+
+type commentFindMany struct {
+	query builder.Query
+}
+
+func (r commentFindMany) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentFindMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentFindMany) with()            {}
+func (r commentFindMany) commentModel()    {}
+func (r commentFindMany) commentRelation() {}
+
+func (r commentActions) FindMany(
+	params ...CommentWhereParam,
+) commentFindMany {
+	var v commentFindMany
+	v.query = builder.NewQuery()
+	v.query.Engine = r.client
+
+	v.query.Operation = "query"
+
+	v.query.Method = "findMany"
+
+	v.query.Model = "Comment"
+	v.query.Outputs = commentOutput
+
+	var where []builder.Field
+	for _, q := range params {
+		if query := q.getQuery(); query.Operation != "" {
+			v.query.Outputs = append(v.query.Outputs, builder.Output{
+				Name:    query.Method,
+				Inputs:  query.Inputs,
+				Outputs: query.Outputs,
+			})
+		} else {
+			where = append(where, q.field())
+		}
+	}
+
+	if len(where) > 0 {
+		v.query.Inputs = append(v.query.Inputs, builder.Input{
+			Name:   "where",
+			Fields: where,
+		})
+	}
+
+	return v
+}
+
+func (r commentFindMany) With(params ...CommentRelationWith) commentFindMany {
+	for _, q := range params {
+		query := q.getQuery()
+		r.query.Outputs = append(r.query.Outputs, builder.Output{
+			Name:    query.Method,
+			Inputs:  query.Inputs,
+			Outputs: query.Outputs,
+		})
+	}
+
+	return r
+}
+
+func (r commentFindMany) Select(params ...commentPrismaFields) commentFindMany {
+	var outputs []builder.Output
+
+	for _, param := range params {
+		outputs = append(outputs, builder.Output{
+			Name: string(param),
+		})
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentFindMany) Omit(params ...commentPrismaFields) commentFindMany {
+	var outputs []builder.Output
+
+	var raw []string
+	for _, param := range params {
+		raw = append(raw, string(param))
+	}
+
+	for _, output := range commentOutput {
+		if !slices.Contains(raw, output.Name) {
+			outputs = append(outputs, output)
+		}
+	}
+
+	r.query.Outputs = outputs
+
+	return r
+}
+
+func (r commentFindMany) OrderBy(params ...CommentOrderByParam) commentFindMany {
+	var fields []builder.Field
+
+	for _, param := range params {
+		fields = append(fields, builder.Field{
+			Name:   param.field().Name,
+			Value:  param.field().Value,
+			Fields: param.field().Fields,
+		})
+	}
+
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:     "orderBy",
+		Fields:   fields,
+		WrapList: true,
+	})
+
+	return r
+}
+
+func (r commentFindMany) Skip(count int) commentFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "skip",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentFindMany) Take(count int) commentFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:  "take",
+		Value: count,
+	})
+	return r
+}
+
+func (r commentFindMany) Cursor(cursor CommentCursorParam) commentFindMany {
+	r.query.Inputs = append(r.query.Inputs, builder.Input{
+		Name:   "cursor",
+		Fields: []builder.Field{cursor.field()},
+	})
+	return r
+}
+
+func (r commentFindMany) Exec(ctx context.Context) (
+	[]CommentModel,
+	error,
+) {
+	var v []CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r commentFindMany) ExecInner(ctx context.Context) (
+	[]InnerComment,
+	error,
+) {
+	var v []InnerComment
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
+}
+
+func (r commentFindMany) Update(params ...CommentSetParam) commentUpdateMany {
+	r.query.Operation = "mutation"
+	r.query.Method = "updateMany"
+	r.query.Model = "Comment"
+
+	r.query.Outputs = countOutput
+
+	var v commentUpdateMany
+	v.query = r.query
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "data",
+		Fields: fields,
+	})
+	return v
+}
+
+type commentUpdateMany struct {
+	query builder.Query
+}
+
+func (r commentUpdateMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentUpdateMany) commentModel() {}
+
+func (r commentUpdateMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentUpdateMany) Tx() CommentManyTxResult {
+	v := newCommentManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+func (r commentFindMany) Delete() commentDeleteMany {
+	var v commentDeleteMany
+	v.query = r.query
+	v.query.Operation = "mutation"
+	v.query.Method = "deleteMany"
+	v.query.Model = "Comment"
+
+	v.query.Outputs = countOutput
+
+	return v
+}
+
+type commentDeleteMany struct {
+	query builder.Query
+}
+
+func (r commentDeleteMany) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (p commentDeleteMany) commentModel() {}
+
+func (r commentDeleteMany) Exec(ctx context.Context) (*BatchResult, error) {
+	var v BatchResult
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentDeleteMany) Tx() CommentManyTxResult {
+	v := newCommentManyTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
 // --- template transaction.gotpl ---
 
 func newUserUniqueTxResult() UserUniqueTxResult {
@@ -8966,6 +15162,54 @@ func (p PostManyTxResult) ExtractQuery() builder.Query {
 func (p PostManyTxResult) IsTx() {}
 
 func (r PostManyTxResult) Result() (v *BatchResult) {
+	if err := r.result.Get(r.query.TxResult, &v); err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func newCommentUniqueTxResult() CommentUniqueTxResult {
+	return CommentUniqueTxResult{
+		result: &transaction.Result{},
+	}
+}
+
+type CommentUniqueTxResult struct {
+	query  builder.Query
+	result *transaction.Result
+}
+
+func (p CommentUniqueTxResult) ExtractQuery() builder.Query {
+	return p.query
+}
+
+func (p CommentUniqueTxResult) IsTx() {}
+
+func (r CommentUniqueTxResult) Result() (v *CommentModel) {
+	if err := r.result.Get(r.query.TxResult, &v); err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func newCommentManyTxResult() CommentManyTxResult {
+	return CommentManyTxResult{
+		result: &transaction.Result{},
+	}
+}
+
+type CommentManyTxResult struct {
+	query  builder.Query
+	result *transaction.Result
+}
+
+func (p CommentManyTxResult) ExtractQuery() builder.Query {
+	return p.query
+}
+
+func (p CommentManyTxResult) IsTx() {}
+
+func (r CommentManyTxResult) Result() (v *BatchResult) {
 	if err := r.result.Get(r.query.TxResult, &v); err != nil {
 		panic(err)
 	}
@@ -9197,6 +15441,120 @@ func (r postUpsertOne) Exec(ctx context.Context) (*PostModel, error) {
 
 func (r postUpsertOne) Tx() PostUniqueTxResult {
 	v := newPostUniqueTxResult()
+	v.query = r.query
+	v.query.TxResult = make(chan []byte, 1)
+	return v
+}
+
+type commentUpsertOne struct {
+	query builder.Query
+}
+
+func (r commentUpsertOne) getQuery() builder.Query {
+	return r.query
+}
+
+func (r commentUpsertOne) ExtractQuery() builder.Query {
+	return r.query
+}
+
+func (r commentUpsertOne) with()            {}
+func (r commentUpsertOne) commentModel()    {}
+func (r commentUpsertOne) commentRelation() {}
+
+func (r commentActions) UpsertOne(
+	params CommentEqualsUniqueWhereParam,
+) commentUpsertOne {
+	var v commentUpsertOne
+	v.query = builder.NewQuery()
+	v.query.Engine = r.client
+
+	v.query.Operation = "mutation"
+	v.query.Method = "upsertOne"
+	v.query.Model = "Comment"
+	v.query.Outputs = commentOutput
+
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "where",
+		Fields: builder.TransformEquals([]builder.Field{params.field()}),
+	})
+
+	return v
+}
+
+func (r commentUpsertOne) Create(
+
+	_content CommentWithPrismaContentSetParam,
+	_post CommentWithPrismaPostSetParam,
+	_user CommentWithPrismaUserSetParam,
+
+	optional ...CommentSetParam,
+) commentUpsertOne {
+	var v commentUpsertOne
+	v.query = r.query
+
+	var fields []builder.Field
+	fields = append(fields, _content.field())
+	fields = append(fields, _post.field())
+	fields = append(fields, _user.field())
+
+	for _, q := range optional {
+		fields = append(fields, q.field())
+	}
+
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "create",
+		Fields: fields,
+	})
+
+	return v
+}
+
+func (r commentUpsertOne) Update(
+	params ...CommentSetParam,
+) commentUpsertOne {
+	var v commentUpsertOne
+	v.query = r.query
+
+	var fields []builder.Field
+	for _, q := range params {
+
+		field := q.field()
+
+		_, isJson := field.Value.(types.JSON)
+		if field.Value != nil && !isJson {
+			v := field.Value
+			field.Fields = []builder.Field{
+				{
+					Name:  "set",
+					Value: v,
+				},
+			}
+
+			field.Value = nil
+		}
+
+		fields = append(fields, field)
+	}
+
+	v.query.Inputs = append(v.query.Inputs, builder.Input{
+		Name:   "update",
+		Fields: fields,
+	})
+
+	return v
+}
+
+func (r commentUpsertOne) Exec(ctx context.Context) (*CommentModel, error) {
+	var v CommentModel
+	if err := r.query.Exec(ctx, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (r commentUpsertOne) Tx() CommentUniqueTxResult {
+	v := newCommentUniqueTxResult()
 	v.query = r.query
 	v.query.TxResult = make(chan []byte, 1)
 	return v

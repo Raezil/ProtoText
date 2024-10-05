@@ -1,30 +1,42 @@
 datasource db {
-  // could be postgresql or mysql
-  provider = "sqlite"
+  provider = "sqlite" // or "postgresql", "mysql", etc.
   url      = "file:dev.db"
 }
- 
+
 generator db {
   provider = "go run github.com/steebchen/prisma-client-go"
 }
- 
+
 model User {
-  id        String   @default(cuid()) @id
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  name     String
-  password String
-  email String @unique
+  id        String    @default(cuid()) @id
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  name      String
+  password  String
+  email     String    @unique
   desc      String?
-  post Post[]
+  post      Post[]
+  comments  Comment[] // Opposite relation field added
 }
 
 model Post {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  content   String
+  title     String
+  
+  author    User      @relation(fields: [authorID], references: [id])
+  authorID  String
+  comments  Comment[]
+}
+
+model Comment {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
-  content String
-  title String
- 
-  author   User   @relation(fields: [authorID], references: [id])
-  authorID String
+  content   String
+  
+  post      Post     @relation(fields: [postID], references: [id])
+  postID    String
+  user      User     @relation(fields: [userID], references: [id])
+  userID    String
 }
