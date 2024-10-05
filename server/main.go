@@ -37,7 +37,7 @@ func authUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Unary
 }
 
 func main() {
-	lis, err := net.Listen("tcp", ":8080")
+	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalln("Failed to listen:", err)
 	}
@@ -61,13 +61,13 @@ func main() {
 		PrismaClient: client,
 	})
 
-	log.Println("Serving gRPC on 0.0.0.0:8080")
+	log.Println("Serving gRPC on 0.0.0.0:50051")
 	go func() {
 		log.Fatalln(grpcServer.Serve(lis))
 	}()
 
 	conn, err := grpc.NewClient(
-		"0.0.0.0:8080",
+		"0.0.0.0:50051",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -85,10 +85,10 @@ func main() {
 		log.Fatalln("Failed to register gateway:", err)
 	}
 	gwServer := &http.Server{
-		Addr:    ":8090",
+		Addr:    ":8080",
 		Handler: gwmux,
 	}
 
-	log.Println("Serving gRPC-Gateway on http://0.0.0.0:8090")
+	log.Println("Serving gRPC-Gateway on http://0.0.0.0:8080")
 	log.Fatalln(gwServer.ListenAndServe())
 }
