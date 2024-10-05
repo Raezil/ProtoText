@@ -20,7 +20,7 @@ func main() {
 
 	client := NewAuthClient(conn)
 	_, err = client.Register(context.Background(), &RegisterRequest{
-		Email:    "alic22242e@example.com",
+		Email:    "alic22e@example.com",
 		Password: "password",
 	})
 	if err != nil {
@@ -71,5 +71,30 @@ func main() {
 		log.Fatalf("UpdatePost failed: %v", err)
 	}
 	fmt.Println("UpdatePost response:", postReply)
+	commentClient := NewCommentsClient(conn)
+	commentReply, err := commentClient.CreateComment(ctx, &CreateCommentRequest{
+		PostID: postReply.Id,
+		Text:   "Hello from client",
+	})
+	if err != nil {
+		log.Fatalf("CreateComment failed: %v", err)
+	}
+	fmt.Println("CreateComment response:", commentReply)
+	commentReply, err = commentClient.ReadComment(ctx, &ReadCommentRequest{
+		Id: commentReply.Id,
+	})
+	if err != nil {
+
+		log.Fatalf("GetComment failed: %v", err)
+	}
+	fmt.Println("GetComment response:", commentReply)
+	commentReply, err = commentClient.UpdateComment(ctx, &UpdateCommentRequest{
+		Id:   commentReply.Id,
+		Text: "Hello from client updated",
+	})
+	if err != nil {
+		log.Fatalf("UpdateComment failed: %v", err)
+	}
+	fmt.Println("UpdateComment response:", commentReply)
 
 }

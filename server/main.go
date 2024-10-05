@@ -60,6 +60,9 @@ func main() {
 	pb.RegisterPostsServer(grpcServer, &pb.PostServer{
 		PrismaClient: client,
 	})
+	pb.RegisterCommentsServer(grpcServer, &pb.CommentServer{
+		PrismaClient: client,
+	})
 
 	log.Println("Serving gRPC on 0.0.0.0:50051")
 	go func() {
@@ -81,6 +84,11 @@ func main() {
 		log.Fatalln("Failed to register gateway:", err)
 	}
 	err = pb.RegisterPostsHandler(context.Background(), gwmux, conn)
+	if err != nil {
+		log.Fatalln("Failed to register gateway:", err)
+	}
+
+	err = pb.RegisterCommentsHandler(context.Background(), gwmux, conn)
 	if err != nil {
 		log.Fatalln("Failed to register gateway:", err)
 	}
