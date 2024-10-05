@@ -1,4 +1,4 @@
-# protobuf-go
+# ProtoText
 
 ## Sample curl requests
 Register:
