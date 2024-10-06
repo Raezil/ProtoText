@@ -30,7 +30,6 @@ func (s *PostServer) CreatePost(ctx context.Context, in *CreatePostRequest) (*Po
 		log.Printf("failed to create post: %v", err)
 		return nil, fmt.Errorf("failed to create post")
 	}
-
 	return &PostReply{
 		Id:      obj.ID,
 		Title:   obj.Title,
@@ -62,17 +61,28 @@ func (s *PostServer) UpdatePost(ctx context.Context, in *UpdatePostRequest) (*Po
 func (s *PostServer) ReadPost(ctx context.Context, in *ReadPostRequest) (*PostReply, error) {
 	obj, err := s.PrismaClient.Post.FindUnique(
 		db.Post.ID.Equals(in.Id),
+	).With(
+		db.Post.Comments.Fetch(), // Ensure comments are fetched
 	).Exec(ctx)
 
 	if err != nil {
 		log.Printf("failed to read post: %v", err)
 		return nil, fmt.Errorf("failed to read post")
 	}
+	commentsReply := make([]*Comment, len(obj.Comments()))
+	for i, comment := range obj.Comments() {
+		commentsReply[i] = &Comment{
+			Id:     comment.ID,
+			Text:   comment.Content,
+			Author: comment.UserID,
+		}
+	}
 
 	return &PostReply{
-		Id:      obj.ID,
-		Title:   obj.Title,
-		Content: obj.Content,
+		Id:       obj.ID,
+		Title:    obj.Title,
+		Content:  obj.Content,
+		Comments: commentsReply,
 	}, nil
 }
 
