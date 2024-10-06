@@ -71,3 +71,18 @@ func (s *CommentServer) ReadComment(ctx context.Context, in *ReadCommentRequest)
 		Content: obj.Content,
 	}, nil
 }
+
+func (s *CommentServer) DeleteComment(ctx context.Context, in *DeleteCommentRequest) (*DeleteCommentReply, error) {
+	_, err := s.PrismaClient.Comment.FindUnique(
+		db.Comment.ID.Equals(in.CommentId),
+	).Delete().Exec(ctx)
+
+	if err != nil {
+		log.Printf("failed to delete comment: %v", err)
+		return nil, fmt.Errorf("failed to delete comment")
+	}
+
+	return &DeleteCommentReply{
+		Status: "200",
+	}, nil
+}

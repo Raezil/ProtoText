@@ -24,6 +24,19 @@ service Posts {
             get: "/v1/posts/{id}"
         };
     }
+    rpc DeletePost (DeletePostRequest) returns (DeletePostReply){
+        option (google.api.http) = {
+           delete: "/v1/posts/{post_id}"
+        };
+    }
+}
+
+message DeletePostRequest {
+    string post_id = 1;
+}
+
+message DeletePostReply {
+    string status = 1;
 }
 
 message CreatePostRequest {
