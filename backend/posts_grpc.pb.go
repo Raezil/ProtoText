@@ -22,6 +22,7 @@ const (
 	Posts_CreatePost_FullMethodName = "/posts.Posts/CreatePost"
 	Posts_UpdatePost_FullMethodName = "/posts.Posts/UpdatePost"
 	Posts_ReadPost_FullMethodName   = "/posts.Posts/ReadPost"
+	Posts_DeletePost_FullMethodName = "/posts.Posts/DeletePost"
 )
 
 // PostsClient is the client API for Posts service.
@@ -31,6 +32,7 @@ type PostsClient interface {
 	CreatePost(ctx context.Context, in *CreatePostRequest, opts ...grpc.CallOption) (*PostReply, error)
 	UpdatePost(ctx context.Context, in *UpdatePostRequest, opts ...grpc.CallOption) (*PostReply, error)
 	ReadPost(ctx context.Context, in *ReadPostRequest, opts ...grpc.CallOption) (*PostReply, error)
+	DeletePost(ctx context.Context, in *DeletePostRequest, opts ...grpc.CallOption) (*DeletePostReply, error)
 }
 
 type postsClient struct {
@@ -71,6 +73,16 @@ func (c *postsClient) ReadPost(ctx context.Context, in *ReadPostRequest, opts ..
 	return out, nil
 }
 
+func (c *postsClient) DeletePost(ctx context.Context, in *DeletePostRequest, opts ...grpc.CallOption) (*DeletePostReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeletePostReply)
+	err := c.cc.Invoke(ctx, Posts_DeletePost_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PostsServer is the server API for Posts service.
 // All implementations must embed UnimplementedPostsServer
 // for forward compatibility.
@@ -78,6 +90,7 @@ type PostsServer interface {
 	CreatePost(context.Context, *CreatePostRequest) (*PostReply, error)
 	UpdatePost(context.Context, *UpdatePostRequest) (*PostReply, error)
 	ReadPost(context.Context, *ReadPostRequest) (*PostReply, error)
+	DeletePost(context.Context, *DeletePostRequest) (*DeletePostReply, error)
 	mustEmbedUnimplementedPostsServer()
 }
 
@@ -96,6 +109,9 @@ func (UnimplementedPostsServer) UpdatePost(context.Context, *UpdatePostRequest) 
 }
 func (UnimplementedPostsServer) ReadPost(context.Context, *ReadPostRequest) (*PostReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReadPost not implemented")
+}
+func (UnimplementedPostsServer) DeletePost(context.Context, *DeletePostRequest) (*DeletePostReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeletePost not implemented")
 }
 func (UnimplementedPostsServer) mustEmbedUnimplementedPostsServer() {}
 func (UnimplementedPostsServer) testEmbeddedByValue()               {}
@@ -172,6 +188,24 @@ func _Posts_ReadPost_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Posts_DeletePost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeletePostRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PostsServer).DeletePost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Posts_DeletePost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PostsServer).DeletePost(ctx, req.(*DeletePostRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Posts_ServiceDesc is the grpc.ServiceDesc for Posts service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -190,6 +224,10 @@ var Posts_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReadPost",
 			Handler:    _Posts_ReadPost_Handler,
+		},
+		{
+			MethodName: "DeletePost",
+			Handler:    _Posts_DeletePost_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

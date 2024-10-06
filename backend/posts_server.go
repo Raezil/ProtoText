@@ -75,3 +75,18 @@ func (s *PostServer) ReadPost(ctx context.Context, in *ReadPostRequest) (*PostRe
 		Content: obj.Content,
 	}, nil
 }
+
+func (s *PostServer) DeletePost(ctx context.Context, in *DeletePostRequest) (*DeletePostReply, error) {
+	_, err := s.PrismaClient.Post.FindUnique(
+		db.Post.ID.Equals(in.PostId),
+	).Delete().Exec(ctx)
+
+	if err != nil {
+		log.Printf("failed to delete comment: %v", err)
+		return nil, fmt.Errorf("failed to delete comment")
+	}
+	return &DeletePostReply{
+		Status: "200",
+	}, nil
+
+}

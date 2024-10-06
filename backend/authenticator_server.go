@@ -51,7 +51,6 @@ func (s *Server) Login(ctx context.Context, in *LoginRequest) (*LoginReply, erro
 	}
 
 	token, err := GenerateJWT(in.Email)
-	fmt.Println(token)
 	if err != nil {
 		log.Printf("Error generating token: %v", err)
 		return nil, fmt.Errorf("could not generate token: %v", err)
@@ -59,7 +58,6 @@ func (s *Server) Login(ctx context.Context, in *LoginRequest) (*LoginReply, erro
 
 	log.Printf("Generated token: %s", token)
 
-	// Zwracanie tokena w odpowiedzi
 	return &LoginReply{
 		Token: token,
 	}, nil

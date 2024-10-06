@@ -20,7 +20,7 @@ func main() {
 
 	client := NewAuthClient(conn)
 	_, err = client.Register(context.Background(), &RegisterRequest{
-		Email:    "alic22e@example.com",
+		Email:    "11alic22e@example.com",
 		Password: "password",
 	})
 	if err != nil {
@@ -96,5 +96,19 @@ func main() {
 		log.Fatalf("UpdateComment failed: %v", err)
 	}
 	fmt.Println("UpdateComment response:", commentReply)
+	commentDelete, err := commentClient.DeleteComment(ctx, &DeleteCommentRequest{
+		CommentId: commentReply.Id,
+	})
+	if err != nil {
+		log.Fatalf("DeleteComment failed: %v", err)
+	}
+	fmt.Println("DeleteComment response:", commentDelete)
+	postDelete, err := postClient.DeletePost(ctx, &DeletePostRequest{
+		PostId: postReply.Id,
+	})
+	if err != nil {
+		log.Fatalf("DeletePost failed: %v", err)
+	}
+	fmt.Println("DeletePost response", postDelete)
 
 }
