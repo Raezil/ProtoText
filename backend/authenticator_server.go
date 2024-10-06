@@ -59,7 +59,6 @@ func (s *Server) Login(ctx context.Context, in *LoginRequest) (*LoginReply, erro
 
 	log.Printf("Generated token: %s", token)
 
-	// Zwracanie tokena w odpowiedzi
 	return &LoginReply{
 		Token: token,
 	}, nil

@@ -14,16 +14,18 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func GenerateJWT(email string) (string, error) {
+func NewClaims(email string) *Claims {
 	expirationTime := time.Now().Add(24 * time.Hour)
-	claims := &Claims{
+	return &Claims{
 		Email: email,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 		},
 	}
+}
 
-	// Tworzymy token z podpisem HMAC
+func GenerateJWT(email string) (string, error) {
+	claims := NewClaims(email)
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
