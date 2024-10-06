@@ -54,7 +54,7 @@ func main() {
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(authUnaryInterceptor),
 	)
-	pb.RegisterAuthServer(grpcServer, &pb.Server{
+	pb.RegisterAuthServer(grpcServer, &pb.AuthenticatorServer{
 		PrismaClient: client,
 	})
 	pb.RegisterPostsServer(grpcServer, &pb.PostServer{

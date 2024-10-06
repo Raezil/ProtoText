@@ -20,7 +20,7 @@ func main() {
 
 	client := NewAuthClient(conn)
 	_, err = client.Register(context.Background(), &RegisterRequest{
-		Email:    "11alic2222222e@example.com",
+		Email:    "11alic22222222e@example.com",
 		Password: "password",
 	})
 	if err != nil {
