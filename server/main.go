@@ -36,6 +36,34 @@ func authUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Unary
 	return handler(ctx, req)
 }
 
+func RegisterServers(server *grpc.Server, client *db.PrismaClient) {
+	pb.RegisterAuthServer(server, &pb.Server{
+		PrismaClient: client,
+	})
+	pb.RegisterPostsServer(server, &pb.PostServer{
+		PrismaClient: client,
+	})
+	pb.RegisterCommentsServer(server, &pb.CommentServer{
+		PrismaClient: client,
+	})
+}
+
+func RegisterHandlers(gwmux *runtime.ServeMux, conn *grpc.ClientConn) {
+	err := pb.RegisterAuthHandler(context.Background(), gwmux, conn)
+	if err != nil {
+		log.Fatalln("Failed to register gateway:", err)
+	}
+	err = pb.RegisterPostsHandler(context.Background(), gwmux, conn)
+	if err != nil {
+		log.Fatalln("Failed to register gateway:", err)
+	}
+
+	err = pb.RegisterCommentsHandler(context.Background(), gwmux, conn)
+	if err != nil {
+		log.Fatalln("Failed to register gateway:", err)
+	}
+}
+
 func main() {
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
@@ -54,15 +82,7 @@ func main() {
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(authUnaryInterceptor),
 	)
-	pb.RegisterAuthServer(grpcServer, &pb.Server{
-		PrismaClient: client,
-	})
-	pb.RegisterPostsServer(grpcServer, &pb.PostServer{
-		PrismaClient: client,
-	})
-	pb.RegisterCommentsServer(grpcServer, &pb.CommentServer{
-		PrismaClient: client,
-	})
+	RegisterServers(grpcServer, client)
 
 	log.Println("Serving gRPC on 0.0.0.0:50051")
 	go func() {
@@ -79,19 +99,7 @@ func main() {
 
 	gwmux := runtime.NewServeMux()
 	// Register Greeter
-	err = pb.RegisterAuthHandler(context.Background(), gwmux, conn)
-	if err != nil {
-		log.Fatalln("Failed to register gateway:", err)
-	}
-	err = pb.RegisterPostsHandler(context.Background(), gwmux, conn)
-	if err != nil {
-		log.Fatalln("Failed to register gateway:", err)
-	}
-
-	err = pb.RegisterCommentsHandler(context.Background(), gwmux, conn)
-	if err != nil {
-		log.Fatalln("Failed to register gateway:", err)
-	}
+	RegisterHandlers(gwmux, conn)
 	gwServer := &http.Server{
 		Addr:    ":8080",
 		Handler: gwmux,
