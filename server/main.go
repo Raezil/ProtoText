@@ -37,7 +37,7 @@ func authUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.Unary
 }
 
 func RegisterServers(server *grpc.Server, client *db.PrismaClient) {
-	pb.RegisterAuthServer(server, &pb.Server{
+	pb.RegisterAuthServer(server, &pb.AuthenticatorServer{
 		PrismaClient: client,
 	})
 	pb.RegisterPostsServer(server, &pb.PostServer{
