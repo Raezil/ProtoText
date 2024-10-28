@@ -31,3 +31,8 @@ curl --http2 -X POST http://localhost:8080/v1/auth/protected      -H "Content-Ty
          }'
 ```
 
+## Run Docker
+```
+docker build -t app8:latest .
+docker run -d -p 50051:50051 -p 8080:8080 --name app9 app8:latest
+```
