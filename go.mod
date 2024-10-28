@@ -6,6 +6,7 @@ require google.golang.org/grpc v1.67.0
 
 require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/steebchen/prisma-client-go v0.42.0 // indirect
 	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sys v0.24.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
