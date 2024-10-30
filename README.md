@@ -11,12 +11,14 @@ docker push $docker_username/app:latest
 
 - Apply kubectl
 ```
+minikube start
+cd k8s
 kubectl apply -f deployment.yaml
 kubectl apply -f service.yaml
 ```
 - Port Foward
 ```
-kubectport-forward service/app-service 8080:808080 -n default
+kubectl port-forward service/app-service 8080:8080 -n default
 ```
 - Check pods
 ```
