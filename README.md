@@ -1,5 +1,22 @@
 # ProtoText
 
+## Kubernetes
+
+- Apply kubectl
+```
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+```
+- Port Foward
+```
+kubectport-forward service/app-service 8080:808080 -n default
+```
+- Check pods
+```
+kubectl get pods -n default
+kubectl describe pod $NAME -n default
+```
+
 ## Sample curl requests
 Register:
 ```
